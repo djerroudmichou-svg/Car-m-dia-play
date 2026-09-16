@@ -1,0 +1,6 @@
+{
+  "name": "Car Media",
+  "description": "An integrated, high-visibility Car Media Player with USB OTG incremental scanning, local Room caching, and steering wheel control tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
