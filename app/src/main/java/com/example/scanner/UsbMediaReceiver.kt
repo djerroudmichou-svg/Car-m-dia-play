@@ -58,33 +58,37 @@ class UsbMediaReceiver : BroadcastReceiver() {
             } catch (e: Exception) {
                 Log.w(TAG, "Error resolving USB name", e)
             }
+            
+            // Check if we should auto-launch (Connection event OR Boot with existing USB)
+            val prefs = context.getSharedPreferences(
+                com.example.theme.CarThemeManager.PREFS_NAME,
+                Context.MODE_PRIVATE
+            )
+            val autoLaunchPref = prefs.getBoolean(
+                com.example.theme.CarThemeManager.KEY_AUTO_LAUNCH_ON_USB,
+                true
+            )
 
-            if (isConnected) {
-                onUsbEventCallback?.invoke(UsbEvent(isConnected = true, deviceName = devName))
+            if (isConnected || (action == Intent.ACTION_BOOT_COMPLETED && autoLaunchPref)) {
+                if (isConnected) {
+                    onUsbEventCallback?.invoke(UsbEvent(isConnected = true, deviceName = devName))
+                }
 
-                // Auto launch app on USB insertion if preference is enabled
-                try {
-                    val prefs = context.getSharedPreferences(
-                        com.example.theme.CarThemeManager.PREFS_NAME,
-                        Context.MODE_PRIVATE
-                    )
-                    val autoLaunch = prefs.getBoolean(
-                        com.example.theme.CarThemeManager.KEY_AUTO_LAUNCH_ON_USB,
-                        true
-                    )
-                    if (autoLaunch) {
+                // Auto launch app if preference is enabled
+                if (autoLaunchPref) {
+                    try {
                         val launchIntent = context.packageManager
                             .getLaunchIntentForPackage(context.packageName)
                             ?.apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
                             }
                         if (launchIntent != null) {
-                            Log.i(TAG, "Auto-launching Car Media Player due to USB connection ($devName)")
+                            Log.i(TAG, "Auto-launching Car Media Player (Action: $action)")
                             context.startActivity(launchIntent)
                         }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to auto-launch app", e)
                     }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to auto-launch app on USB connection", e)
                 }
             } else if (isDisconnected) {
                 onUsbEventCallback?.invoke(UsbEvent(isConnected = false, deviceName = devName))

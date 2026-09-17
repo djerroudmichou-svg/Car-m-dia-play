@@ -60,6 +60,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Check if launched by USB and if auto-launch is disabled
+        if (intent?.action == "android.hardware.usb.action.USB_DEVICE_ATTACHED") {
+            val prefs = getSharedPreferences(com.example.theme.CarThemeManager.PREFS_NAME, MODE_PRIVATE)
+            val autoLaunch = prefs.getBoolean(com.example.theme.CarThemeManager.KEY_AUTO_LAUNCH_ON_USB, true)
+            if (!autoLaunch) {
+                Log.i(TAG, "USB auto-launch is disabled in settings, finishing MainActivity")
+                finish()
+                return
+            }
+        }
+
         // Keep screen on continuously when opening the app (prevents screen timeout/turn off in car)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         enableEdgeToEdge()
@@ -69,40 +81,8 @@ class MainActivity : ComponentActivity() {
         repository = MediaRepository(database)
         scanner = UsbMediaScanner(this, repository)
 
-        // 2. Initialize Steering Wheel Controls Key Tracker
-        swcKeyTracker = SwcKeyTracker(
-            onPlayPauseComboTriggered = {
-                runOnUiThread {
-                    val toastMsg = viewModel.appStrings.value.swcSimultaneousToggleToast
-                    Toast.makeText(this, toastMsg, Toast.LENGTH_SHORT).show()
-                    viewModel.togglePlayPause()
-                }
-            },
-            onNextTrack = {
-                runOnUiThread { viewModel.playNext() }
-            },
-            onPrevTrack = {
-                runOnUiThread { viewModel.playPrevious() }
-            },
-            onFastForwardStart = {
-                runOnUiThread {
-                    Toast.makeText(this, viewModel.appStrings.value.fastForwarding, Toast.LENGTH_SHORT).show()
-                    viewModel.startFastForward()
-                }
-            },
-            onFastForwardEnd = {
-                runOnUiThread { viewModel.stopFastForward() }
-            },
-            onRewindStart = {
-                runOnUiThread {
-                    Toast.makeText(this, viewModel.appStrings.value.rewinding, Toast.LENGTH_SHORT).show()
-                    viewModel.startRewind()
-                }
-            },
-            onRewindEnd = {
-                runOnUiThread { viewModel.stopRewind() }
-            }
-        )
+        // 2. Initialize Steering Wheel Controls Key Tracker from ViewModel
+        swcKeyTracker = viewModel.swcKeyTracker
 
         // 3. Start Media3 Playback Service & connect SWC / Session callbacks
         startPlaybackService()
@@ -159,9 +139,19 @@ class MainActivity : ComponentActivity() {
             MyApplicationTheme(darkTheme = isDarkTheme) {
                 val currentLanguage by viewModel.currentLanguage.collectAsStateWithLifecycle()
                 val appStrings by viewModel.appStrings.collectAsStateWithLifecycle()
+                val screenScale by viewModel.screenScale.collectAsStateWithLifecycle()
+                val fontSizeScale by viewModel.fontSizeScale.collectAsStateWithLifecycle()
+                val currentDensity = androidx.compose.ui.platform.LocalDensity.current
+                val customDensity = androidx.compose.runtime.remember(currentDensity, screenScale, fontSizeScale) {
+                    androidx.compose.ui.unit.Density(
+                        density = currentDensity.density * screenScale,
+                        fontScale = currentDensity.fontScale * fontSizeScale
+                    )
+                }
                 val layoutDirection = if (currentLanguage.isRtl) LayoutDirection.Rtl else LayoutDirection.Ltr
 
                 CompositionLocalProvider(
+                    androidx.compose.ui.platform.LocalDensity provides customDensity,
                     LocalLayoutDirection provides layoutDirection,
                     LocalAppStrings provides appStrings,
                     LocalCarColors provides carColors
@@ -184,7 +174,7 @@ class MainActivity : ComponentActivity() {
                         ) { permissions ->
                             val allGranted = permissions.values.all { it }
                             if (allGranted) {
-                                viewModel.triggerScan()
+                                // Handled by the LaunchedEffect below
                             } else {
                                 Log.w(TAG, "Not all storage/notification permissions were granted")
                             }
@@ -221,7 +211,8 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             
-                            // Run scan automatically on load to restore caches
+                            // Run scan automatically on load after a small delay to prioritize UI rendering
+                            kotlinx.coroutines.delay(800)
                             viewModel.triggerScan()
                         }
 
@@ -274,6 +265,21 @@ class MainActivity : ComponentActivity() {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus && viewModel.isFullscreenMode.value) {
             applyImmersiveFullscreen(true)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == "android.hardware.usb.action.USB_DEVICE_ATTACHED") {
+            val prefs = getSharedPreferences(com.example.theme.CarThemeManager.PREFS_NAME, MODE_PRIVATE)
+            val autoLaunch = prefs.getBoolean(com.example.theme.CarThemeManager.KEY_AUTO_LAUNCH_ON_USB, true)
+            if (!autoLaunch) {
+                Log.i(TAG, "USB auto-launch is disabled in settings, ignoring onNewIntent for USB")
+                return
+            }
+            Log.i(TAG, "USB Device attached via onNewIntent")
+            viewModel.triggerScan()
         }
     }
 

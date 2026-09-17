@@ -43,6 +43,8 @@ class CarThemeManager(private val context: Context) : SensorEventListener {
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on_mode"
         private const val KEY_FULLSCREEN_MODE = "fullscreen_mode"
         const val KEY_AUTO_LAUNCH_ON_USB = "auto_launch_on_usb"
+        private const val KEY_SCREEN_SCALE = "screen_scale"
+        private const val KEY_FONT_SCALE = "font_scale"
         private const val LUX_DARK_THRESHOLD = 40.0f // Car tunnel / twilight / night threshold
     }
 
@@ -89,6 +91,16 @@ class CarThemeManager(private val context: Context) : SensorEventListener {
         prefs.getBoolean(KEY_AUTO_LAUNCH_ON_USB, true)
     )
     val isAutoLaunchOnUsb: StateFlow<Boolean> = _isAutoLaunchOnUsb.asStateFlow()
+
+    private val _screenScale = MutableStateFlow(
+        prefs.getFloat(KEY_SCREEN_SCALE, 1.0f)
+    )
+    val screenScale: StateFlow<Float> = _screenScale.asStateFlow()
+
+    private val _fontSizeScale = MutableStateFlow(
+        prefs.getFloat(KEY_FONT_SCALE, 1.0f)
+    )
+    val fontSizeScale: StateFlow<Float> = _fontSizeScale.asStateFlow()
 
     private val _currentLux = MutableStateFlow(100f)
     val currentLux: StateFlow<Float> = _currentLux.asStateFlow()
@@ -157,6 +169,16 @@ class CarThemeManager(private val context: Context) : SensorEventListener {
     fun setAutoLaunchOnUsb(enabled: Boolean) {
         _isAutoLaunchOnUsb.value = enabled
         prefs.edit().putBoolean(KEY_AUTO_LAUNCH_ON_USB, enabled).apply()
+    }
+
+    fun setScreenScale(scale: Float) {
+        _screenScale.value = scale
+        prefs.edit().putFloat(KEY_SCREEN_SCALE, scale).apply()
+    }
+
+    fun setFontSizeScale(scale: Float) {
+        _fontSizeScale.value = scale
+        prefs.edit().putFloat(KEY_FONT_SCALE, scale).apply()
     }
 
     private fun updateSensorRegistration() {

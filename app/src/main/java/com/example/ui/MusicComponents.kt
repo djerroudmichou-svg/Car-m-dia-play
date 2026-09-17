@@ -4,6 +4,8 @@ import android.text.format.DateUtils
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -113,6 +115,23 @@ fun MusicCategorySelector(
     val strings = LocalAppStrings.current
     val scrollState = rememberScrollState()
 
+    LaunchedEffect(selectedCategory, selectedVolumeId) {
+        if (scrollState.maxValue > 0) {
+            val categories = listOf(
+                MusicCategory.ALL,
+                MusicCategory.ARTISTS,
+                MusicCategory.ALBUMS,
+                MusicCategory.FOLDERS,
+                MusicCategory.PLAYLISTS,
+                MusicCategory.DRIVES
+            )
+            val index = categories.indexOf(selectedCategory).coerceAtLeast(0)
+            val fraction = index.toFloat() / (categories.size - 1).coerceAtLeast(1)
+            val target = (scrollState.maxValue * fraction).toInt()
+            scrollState.animateScrollTo(target)
+        }
+    }
+
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -148,6 +167,13 @@ fun MusicCategorySelector(
             icon = Icons.Filled.Folder,
             isSelected = selectedCategory == MusicCategory.FOLDERS,
             onClick = { onCategorySelected(MusicCategory.FOLDERS) },
+            isCompact = isCompact
+        )
+        CategoryChip(
+            title = strings.musicPlaylists,
+            icon = Icons.Filled.QueueMusic,
+            isSelected = selectedCategory == MusicCategory.PLAYLISTS,
+            onClick = { onCategorySelected(MusicCategory.PLAYLISTS) },
             isCompact = isCompact
         )
         CategoryChip(
@@ -230,12 +256,17 @@ fun SubListHeader(
 // ==========================================
 // TRACKS LIST VIEW
 // ==========================================
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TracksListView(
     tracks: List<MediaItemEntity>,
     currentPlaying: MediaItemEntity?,
     isPlaying: Boolean,
-    onTrackClick: (MediaItemEntity) -> Unit
+    selectedIds: Set<String> = emptySet(),
+    isSelectionMode: Boolean = false,
+    onTrackClick: (MediaItemEntity) -> Unit,
+    onTrackLongClick: ((MediaItemEntity) -> Unit)? = null,
+    onToggleSelection: ((MediaItemEntity) -> Unit)? = null
 ) {
     val strings = LocalAppStrings.current
     val colors = LocalCarColors.current
@@ -256,21 +287,62 @@ fun TracksListView(
         ) {
             items(tracks, key = { it.filePath }) { track ->
                 val isSelected = currentPlaying?.filePath == track.filePath
+                val isMultiSelected = selectedIds.contains(track.filePath)
+                
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .background(if (isSelected) colors.surfaceSecondary.copy(alpha = 0.9f) else colors.surface)
+                        .background(
+                            when {
+                                isMultiSelected -> colors.accent.copy(alpha = 0.2f)
+                                isSelected -> colors.surfaceSecondary.copy(alpha = 0.9f)
+                                else -> colors.surface
+                            }
+                        )
                         .border(
-                            width = if (isSelected) 1.5.dp else 0.dp,
-                            color = if (isSelected) colors.accent else Color.Transparent,
+                            width = when {
+                                isMultiSelected -> 2.dp
+                                isSelected -> 1.5.dp
+                                else -> 0.dp
+                            },
+                            color = when {
+                                isMultiSelected -> colors.accent
+                                isSelected -> colors.accent.copy(alpha = 0.6f)
+                                else -> Color.Transparent
+                            },
                             shape = RoundedCornerShape(12.dp)
                         )
-                        .clickable { onTrackClick(track) }
+                        .combinedClickable(
+                            onClick = { 
+                                if (isSelectionMode && onToggleSelection != null) {
+                                    onToggleSelection(track)
+                                } else {
+                                    onTrackClick(track)
+                                }
+                            },
+                            onLongClick = {
+                                if (onToggleSelection != null) {
+                                    onToggleSelection(track)
+                                } else {
+                                    onTrackLongClick?.invoke(track)
+                                }
+                            }
+                        )
                         .padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    // Selection Indicator / Checkbox
+                    if (isSelectionMode) {
+                        Icon(
+                            imageVector = if (isMultiSelected) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
+                            contentDescription = "Selected",
+                            tint = if (isMultiSelected) colors.accent else colors.textSecondary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
                     // Album Cover Thumbnail
                     Box(
                         modifier = Modifier
@@ -325,6 +397,21 @@ fun TracksListView(
                         color = colors.textSecondary,
                         fontSize = 11.sp
                     )
+
+                    // Options / More Button for quick action on car displays
+                    if (onTrackLongClick != null) {
+                        IconButton(
+                            onClick = { onTrackLongClick(track) },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.MoreVert,
+                                contentDescription = "Track options",
+                                tint = colors.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -591,7 +678,7 @@ fun CoverArtImage(
                 imageVector = Icons.Outlined.Album,
                 contentDescription = null,
                 tint = colors.accent.copy(alpha = 0.8f),
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(120.dp)
             )
         }
     }

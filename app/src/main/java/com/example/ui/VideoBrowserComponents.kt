@@ -7,6 +7,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,11 +19,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,6 +37,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.CustomPlaylistEntity
 import com.example.data.MediaItemEntity
 import com.example.localization.LocalAppStrings
 import com.example.theme.LocalCarColors
@@ -58,6 +63,21 @@ fun VideoCategorySelector(
 ) {
     val strings = LocalAppStrings.current
     val scrollState = rememberScrollState()
+
+    LaunchedEffect(selectedCategory, selectedVolumeId) {
+        if (scrollState.maxValue > 0) {
+            val categories = listOf(
+                VideoCategory.ALL,
+                VideoCategory.FOLDERS,
+                VideoCategory.PLAYLISTS,
+                VideoCategory.DRIVES
+            )
+            val index = categories.indexOf(selectedCategory).coerceAtLeast(0)
+            val fraction = index.toFloat() / (categories.size - 1).coerceAtLeast(1)
+            val target = (scrollState.maxValue * fraction).toInt()
+            scrollState.animateScrollTo(target)
+        }
+    }
 
     Row(
         modifier = modifier
@@ -267,7 +287,7 @@ fun VideoFoldersListView(
 }
 
 /**
- * Smart playlists list view: Favorites, Short Clips, Movies & Episodes, Recently Added.
+ * Playlists list view: Custom user video playlists + smart playlists (Favorites, Short Clips, Movies & Episodes, Recently Added).
  */
 @Composable
 fun VideoPlaylistsListView(
@@ -275,13 +295,18 @@ fun VideoPlaylistsListView(
     shortClipsCount: Int,
     moviesCount: Int,
     recentCount: Int,
+    customPlaylists: List<CustomPlaylistEntity> = emptyList(),
+    customPlaylistCounts: Map<Long, Int> = emptyMap(),
     onPlaylistSelected: (VideoPlaylistType) -> Unit,
+    onCustomPlaylistSelected: (CustomPlaylistEntity) -> Unit = {},
+    onCreatePlaylistClick: () -> Unit = {},
+    onDeleteCustomPlaylist: (CustomPlaylistEntity) -> Unit = {},
     isCompact: Boolean = false
 ) {
     val strings = LocalAppStrings.current
     val colors = LocalCarColors.current
 
-    val playlists = listOf(
+    val smartPlaylists = listOf(
         PlaylistCardItem(
             type = VideoPlaylistType.FAVORITES,
             title = strings.playlistFavorites,
@@ -318,9 +343,143 @@ fun VideoPlaylistsListView(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(bottom = 16.dp)
     ) {
-        items(playlists, key = { it.type.name }) { item ->
+        // Create New Video Playlist banner
+        item(key = "create_video_playlist_banner") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(colors.accent.copy(alpha = 0.12f))
+                    .border(1.5.dp, colors.accent.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                    .clickable(onClick = onCreatePlaylistClick)
+                    .padding(horizontal = 14.dp, vertical = if (isCompact) 10.dp else 12.dp)
+                    .testTag("banner_create_video_playlist"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(if (isCompact) 38.dp else 44.dp)
+                        .background(colors.accent, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Add,
+                        contentDescription = null,
+                        tint = colors.onAccent,
+                        modifier = Modifier.size(if (isCompact) 22.dp else 26.dp)
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = strings.createPlaylist,
+                        color = colors.accent,
+                        fontSize = if (isCompact) 13.sp else 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "إنشاء قائمة فيديو مخصصة",
+                        color = colors.textSecondary,
+                        fontSize = if (isCompact) 10.sp else 11.sp
+                    )
+                }
+            }
+        }
+
+        // Custom Playlists (if any)
+        if (customPlaylists.isNotEmpty()) {
+            item(key = "custom_video_playlists_header") {
+                Text(
+                    text = strings.customPlaylists,
+                    color = colors.accent,
+                    fontSize = if (isCompact) 12.sp else 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
+                )
+            }
+
+            items(customPlaylists, key = { "custom_${it.id}" }) { playlist ->
+                val count = customPlaylistCounts[playlist.id] ?: 0
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(colors.surface)
+                        .border(1.dp, colors.cardBorder, RoundedCornerShape(14.dp))
+                        .clickable { onCustomPlaylistSelected(playlist) }
+                        .padding(horizontal = 14.dp, vertical = if (isCompact) 10.dp else 12.dp)
+                        .testTag("custom_video_playlist_${playlist.id}"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(if (isCompact) 42.dp else 46.dp)
+                            .background(colors.accent.copy(alpha = 0.15f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.VideoLibrary,
+                            contentDescription = null,
+                            tint = colors.accent,
+                            modifier = Modifier.size(if (isCompact) 22.dp else 24.dp)
+                        )
+                    }
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = playlist.name,
+                            color = colors.textPrimary,
+                            fontSize = if (isCompact) 13.sp else 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = String.format(strings.videoCountLabel, count),
+                            color = colors.textSecondary,
+                            fontSize = if (isCompact) 10.sp else 11.sp
+                        )
+                    }
+
+                    IconButton(
+                        onClick = { onDeleteCustomPlaylist(playlist) },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Delete,
+                            contentDescription = "Delete Playlist",
+                            tint = colors.textSecondary.copy(alpha = 0.7f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    Icon(
+                        imageVector = Icons.Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = colors.textSecondary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        }
+
+        // Smart Playlists Section Header
+        item(key = "smart_playlists_header") {
+            Text(
+                text = "قوائم التشغيل الذكية",
+                color = colors.accent,
+                fontSize = if (isCompact) 12.sp else 13.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
+            )
+        }
+
+        items(smartPlaylists, key = { it.type.name }) { item ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -521,13 +680,18 @@ fun VideoDrivesListView(
  * Video list view item with favorite star button, car-sized touch targets,
  * duration display, and active playing indicator.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun VideoItemsListView(
     videos: List<MediaItemEntity>,
     currentPlaying: MediaItemEntity?,
     favoritePaths: Set<String>,
+    selectedIds: Set<String> = emptySet(),
+    isSelectionMode: Boolean = false,
     onVideoClick: (MediaItemEntity) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    onVideoLongClick: ((MediaItemEntity) -> Unit)? = null,
+    onToggleSelection: ((MediaItemEntity) -> Unit)? = null,
     isCompact: Boolean = false
 ) {
     val strings = LocalAppStrings.current
@@ -547,6 +711,7 @@ fun VideoItemsListView(
         ) {
             items(videos, key = { it.filePath }) { video ->
                 val isSelected = currentPlaying?.filePath == video.filePath
+                val isMultiSelected = selectedIds.contains(video.filePath)
                 val isFav = favoritePaths.contains(video.filePath)
                 val folderName = File(video.filePath).parentFile?.name ?: ""
 
@@ -554,18 +719,57 @@ fun VideoItemsListView(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .background(if (isSelected) colors.surfaceSecondary else colors.surface)
+                        .background(
+                            when {
+                                isMultiSelected -> colors.accent.copy(alpha = 0.2f)
+                                isSelected -> colors.surfaceSecondary
+                                else -> colors.surface
+                            }
+                        )
                         .border(
-                            width = if (isSelected) 1.5.dp else 1.dp,
-                            color = if (isSelected) colors.accent else colors.cardBorder,
+                            width = when {
+                                isMultiSelected -> 2.dp
+                                isSelected -> 1.5.dp
+                                else -> 1.dp
+                            },
+                            color = when {
+                                isMultiSelected -> colors.accent
+                                isSelected -> colors.accent.copy(alpha = 0.7f)
+                                else -> colors.cardBorder
+                            },
                             shape = RoundedCornerShape(12.dp)
                         )
-                        .clickable { onVideoClick(video) }
+                        .combinedClickable(
+                            onClick = { 
+                                if (isSelectionMode && onToggleSelection != null) {
+                                    onToggleSelection(video)
+                                } else {
+                                    onVideoClick(video)
+                                }
+                            },
+                            onLongClick = {
+                                if (onToggleSelection != null) {
+                                    onToggleSelection(video)
+                                } else {
+                                    onVideoLongClick?.invoke(video)
+                                }
+                            }
+                        )
                         .padding(horizontal = 10.dp, vertical = if (isCompact) 6.dp else 8.dp)
                         .testTag("video_item_${video.filePath.hashCode()}"),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    // Selection Indicator
+                    if (isSelectionMode) {
+                        Icon(
+                            imageVector = if (isMultiSelected) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
+                            contentDescription = "Selected",
+                            tint = if (isMultiSelected) colors.accent else colors.textSecondary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
                     // Video icon indicator
                     Box(
                         modifier = Modifier
@@ -628,6 +832,21 @@ fun VideoItemsListView(
                             tint = if (isFav) Color(0xFFFFB300) else colors.textSecondary.copy(alpha = 0.6f),
                             modifier = Modifier.size(if (isCompact) 18.dp else 22.dp)
                         )
+                    }
+
+                    // Options / More Button for car convenience
+                    if (onVideoLongClick != null) {
+                        IconButton(
+                            onClick = { onVideoLongClick(video) },
+                            modifier = Modifier.size(if (isCompact) 32.dp else 36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.MoreVert,
+                                contentDescription = "Video options",
+                                tint = colors.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
             }

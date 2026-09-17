@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Generic USB Mass Storage filter to trigger auto-launch -->
+    <!-- We don't specify vendor/product ID to catch any USB drive -->
+    <usb-device class="8" /> <!-- USB Class 8 is Mass Storage -->
+</resources>

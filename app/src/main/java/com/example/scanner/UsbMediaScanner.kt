@@ -118,48 +118,45 @@ class UsbMediaScanner(
 
     /**
      * Scans internal device storage using Android MediaStore and directory fallback.
-     * Respects cache validation: if items match cache, loads from cache; if changed, rebuilds from 0.
+     * Prefers MediaStore for speed.
      */
     private suspend fun scanInternalStorage(volume: VolumeEntity, rootDir: File) {
         withContext(Dispatchers.IO) {
             try {
-                val cachedItems = repository.getMediaForVolume(volume.volumeId)
                 val mediaStoreItems = mutableListOf<MediaItemEntity>()
-
-                // Query MediaStore for audio
                 queryAudioMediaStore(volume.volumeId, mediaStoreItems)
-                // Query MediaStore for video
                 queryVideoMediaStore(volume.volumeId, mediaStoreItems)
 
-                // Also check standard media directories in case MediaStore index is delayed
-                val diskFiles = mutableListOf<File>()
-                listOf(
-                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
-                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
-                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM)
-                ).forEach { folder ->
-                    if (folder != null && folder.exists()) {
-                        findMediaFilesRecursively(folder, diskFiles)
-                    }
-                }
-
-                // Merge disk files that weren't captured by MediaStore
-                val existingPaths = mediaStoreItems.map { it.filePath }.toSet()
-                val missingFiles = diskFiles.filter { it.absolutePath !in existingPaths }
-                if (missingFiles.isNotEmpty()) {
-                    val retriever = MediaMetadataRetriever()
-                    for (file in missingFiles) {
-                        try {
-                            mediaStoreItems.add(extractMetadata(file, volume.volumeId, retriever))
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Error extracting metadata for missing internal file", e)
+                // If MediaStore is empty, we MUST scan manually
+                if (mediaStoreItems.isEmpty()) {
+                    Log.d(TAG, "MediaStore is empty for internal storage, falling back to disk scan")
+                    val diskFiles = mutableListOf<File>()
+                    listOf(
+                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM)
+                    ).forEach { folder ->
+                        if (folder != null && folder.exists()) {
+                            findMediaFilesRecursively(folder, diskFiles)
                         }
                     }
-                    try { retriever.release() } catch (e: Exception) {}
+
+                    if (diskFiles.isNotEmpty()) {
+                        val retriever = MediaMetadataRetriever()
+                        for (file in diskFiles) {
+                            try {
+                                mediaStoreItems.add(extractMetadata(file, volume.volumeId, retriever))
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Error extracting metadata for internal file: ${file.path}", e)
+                            }
+                        }
+                        try { retriever.release() } catch (e: Exception) {}
+                    }
                 }
 
-                // Check cache match
+                // Check cache match with current MediaStore state
+                val cachedItems = repository.getMediaForVolume(volume.volumeId)
                 val isIdentical = cachedItems.isNotEmpty() &&
                     cachedItems.size == mediaStoreItems.size &&
                     run {
@@ -171,12 +168,12 @@ class UsbMediaScanner(
                     }
 
                 if (isIdentical) {
-                    Log.d(TAG, "Internal storage playlist is identical to cache (${cachedItems.size} items). Using cache.")
+                    Log.d(TAG, "Internal storage cache matches MediaStore. Skipping update.")
                     return@withContext
                 }
 
-                // If difference or first time: rebuild cache from 0!
-                Log.d(TAG, "Internal storage changed or new. Rebuilding cache from 0 with ${mediaStoreItems.size} items.")
+                // If difference detected, update DB
+                Log.d(TAG, "Updating internal storage cache with ${mediaStoreItems.size} items.")
                 repository.clearMediaForVolume(volume.volumeId)
                 if (mediaStoreItems.isNotEmpty()) {
                     repository.insertMediaItems(mediaStoreItems)
@@ -189,61 +186,81 @@ class UsbMediaScanner(
 
     /**
      * Scans a USB storage volume.
-     * Rule: If playlist is identical to cache -> pull from cache directly.
-     * If there is any difference or change -> wipe cache and rebuild from 0!
+     * Optimized to perform incremental updates: only extracts metadata for NEW or CHANGED files.
      */
     private suspend fun scanVolumeWithCacheValidation(volume: VolumeEntity, rootDir: File) {
         withContext(Dispatchers.IO) {
             try {
-                // 1. Fetch cached media items for this volume from DB
+                // 1. Fetch cached media items for this volume
                 val cachedItems = repository.getMediaForVolume(volume.volumeId)
+                val cachedMap = cachedItems.associateBy { it.filePath }
+
+                // 2. Find files on disk (basic listing is fast)
                 val filesOnDisk = mutableListOf<File>()
                 findMediaFilesRecursively(rootDir, filesOnDisk)
 
-                Log.d(TAG, "Scanning USB volume ${volume.label}. Disk files: ${filesOnDisk.size}, Cached: ${cachedItems.size}")
+                Log.d(TAG, "Syncing USB volume ${volume.label}. Disk: ${filesOnDisk.size}, Cache: ${cachedItems.size}")
 
-                // 2. Strict cache comparison
-                val cachedMap = cachedItems.associateBy { it.filePath }
-                val isCacheIdentical = cachedItems.isNotEmpty() &&
-                    cachedItems.size == filesOnDisk.size &&
-                    filesOnDisk.all { file ->
-                        val c = cachedMap[file.absolutePath]
-                        c != null && c.lastModified == file.lastModified() && c.size == file.length()
+                // 3. Detect changes
+                val itemsToDelete = mutableListOf<MediaItemEntity>()
+                val filesToScan = mutableListOf<File>()
+                val itemsToKeep = mutableListOf<MediaItemEntity>()
+
+                val diskPaths = filesOnDisk.map { it.absolutePath }.toSet()
+                
+                // Identify deleted items
+                for (cached in cachedItems) {
+                    if (!diskPaths.contains(cached.filePath)) {
+                        itemsToDelete.add(cached)
                     }
+                }
 
-                if (isCacheIdentical) {
-                    Log.i(TAG, "Playlist on ${volume.label} is identical to cache (${cachedItems.size} items). Instant cache load!")
-                    _scanProgress.value = "تم سحب القائمة من الكاش (${cachedItems.size} مقطع)"
+                // Identify new or changed files
+                for (file in filesOnDisk) {
+                    val cached = cachedMap[file.absolutePath]
+                    if (cached == null || cached.lastModified != file.lastModified() || cached.size != file.length()) {
+                        filesToScan.add(file)
+                    } else {
+                        itemsToKeep.add(cached)
+                    }
+                }
+
+                if (itemsToDelete.isEmpty() && filesToScan.isEmpty()) {
+                    Log.i(TAG, "USB volume ${volume.label} is already up to date.")
                     return@withContext
                 }
 
-                // 3. Difference detected -> Rebuild cache from 0!
-                Log.i(TAG, "Difference detected on ${volume.label}. Rebuilding cache from 0 as requested.")
-                _scanProgress.value = "تحديث الوسائط: جاري إعادة بناء الكاش من الصفر..."
-                repository.clearMediaForVolume(volume.volumeId)
+                Log.i(TAG, "USB Incremental Sync: ${filesToScan.size} new/changed, ${itemsToDelete.size} deleted, ${itemsToKeep.size} unchanged.")
 
-                val freshItems = mutableListOf<MediaItemEntity>()
-                val retriever = MediaMetadataRetriever()
-
-                for ((index, file) in filesOnDisk.withIndex()) {
-                    _scanProgress.value = "فحص الملفات (${index + 1}/${filesOnDisk.size})"
-                    val entity = extractMetadata(file, volume.volumeId, retriever)
-                    freshItems.add(entity)
+                // 4. Perform updates
+                if (itemsToDelete.isNotEmpty()) {
+                    repository.deleteMediaItems(itemsToDelete)
                 }
 
-                try {
-                    retriever.release()
-                } catch (e: Exception) {
-                    // Ignore
+                if (filesToScan.isNotEmpty()) {
+                    val freshItems = mutableListOf<MediaItemEntity>()
+                    val retriever = MediaMetadataRetriever()
+                    
+                    for ((index, file) in filesToScan.withIndex()) {
+                        _scanProgress.value = "فحص الملفات الجديدة (${index + 1}/${filesToScan.size})"
+                        try {
+                            val entity = extractMetadata(file, volume.volumeId, retriever)
+                            freshItems.add(entity)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Metadata extraction failed for ${file.path}", e)
+                        }
+                    }
+                    
+                    try { retriever.release() } catch (e: Exception) {}
+                    
+                    if (freshItems.isNotEmpty()) {
+                        repository.insertMediaItems(freshItems)
+                    }
                 }
 
-                if (freshItems.isNotEmpty()) {
-                    repository.insertMediaItems(freshItems)
-                }
-
-                Log.i(TAG, "Cache rebuilt from 0 with ${freshItems.size} items for ${volume.label}")
+                Log.i(TAG, "Incremental sync complete for ${volume.label}")
             } catch (e: Exception) {
-                Log.e(TAG, "Error scanning volume ${volume.volumeId}", e)
+                Log.e(TAG, "Error in incremental sync for ${volume.volumeId}", e)
             }
         }
     }

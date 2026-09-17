@@ -2,10 +2,14 @@ package com.example.ui
 
 import android.text.format.DateUtils
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -19,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,10 +58,34 @@ fun EmbeddedVideoPlayerCard(
     val colors = LocalCarColors.current
     val isCurrentVideo = currentPlaying?.isVideo == true
 
+    var totalDragX by remember { mutableFloatStateOf(0f) }
+    val animatedDragX by animateFloatAsState(
+        targetValue = totalDragX,
+        animationSpec = spring(stiffness = Spring.StiffnessLow),
+        label = "embedded_video_drag"
+    )
+
+    val swipeExpandModifier = Modifier.pointerInput(Unit) {
+        detectHorizontalDragGestures(
+            onDragStart = { totalDragX = 0f },
+            onHorizontalDrag = { _, dragAmount -> totalDragX += dragAmount },
+            onDragEnd = {
+                val threshold = 50.dp.toPx()
+                if (kotlin.math.abs(totalDragX) > threshold) {
+                    onFullscreenClick()
+                }
+                totalDragX = 0f
+            },
+            onDragCancel = { totalDragX = 0f }
+        )
+    }
+
     Box(
         modifier = modifier
+            .offset(x = animatedDragX.dp / 8)
             .clip(RoundedCornerShape(20.dp))
-            .background(if (colors.isDark) Color(0xFF070A14) else Color(0xFF0F172A)),
+            .background(if (colors.isDark) Color(0xFF070A14) else Color(0xFF0F172A))
+            .then(swipeExpandModifier),
         contentAlignment = Alignment.Center
     ) {
         if (player != null && isCurrentVideo && !isVideoFullscreen) {
@@ -314,6 +343,28 @@ fun FullscreenVideoPlayer(
     val colors = LocalCarColors.current
     var showOverlay by remember { mutableStateOf(true) }
 
+    var totalDragX by remember { mutableFloatStateOf(0f) }
+    val animatedDragX by animateFloatAsState(
+        targetValue = totalDragX,
+        animationSpec = spring(stiffness = Spring.StiffnessLow),
+        label = "fullscreen_video_drag"
+    )
+
+    val swipeExitModifier = Modifier.pointerInput(Unit) {
+        detectHorizontalDragGestures(
+            onDragStart = { totalDragX = 0f },
+            onHorizontalDrag = { _, dragAmount -> totalDragX += dragAmount },
+            onDragEnd = {
+                val threshold = 70.dp.toPx()
+                if (kotlin.math.abs(totalDragX) > threshold) {
+                    onExitFullscreen()
+                }
+                totalDragX = 0f
+            },
+            onDragCancel = { totalDragX = 0f }
+        )
+    }
+
     // Aspect ratio toggle state (Fit vs Zoom)
     var isZoomMode by remember { mutableStateOf(false) }
 
@@ -331,7 +382,9 @@ fun FullscreenVideoPlayer(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .offset(x = animatedDragX.dp / 10)
             .background(Color.Black)
+            .then(swipeExitModifier)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null

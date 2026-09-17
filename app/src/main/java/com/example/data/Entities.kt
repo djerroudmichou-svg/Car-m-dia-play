@@ -26,3 +26,21 @@ data class VolumeEntity(
     val lastScanned: Long,
     val isMounted: Boolean
 )
+
+@Entity(tableName = "custom_playlists")
+data class CustomPlaylistEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val isVideo: Boolean,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "playlist_items",
+    primaryKeys = ["playlistId", "filePath"]
+)
+data class PlaylistItemEntity(
+    val playlistId: Long,
+    val filePath: String,
+    val addedAt: Long = System.currentTimeMillis()
+)

@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.Player
+import com.example.data.CustomPlaylistEntity
 import com.example.data.MediaItemEntity
 import com.example.localization.LocalAppStrings
 import com.example.service.PlaybackService
@@ -78,6 +79,33 @@ fun CarMediaPlayerScreen(
     val isFastForwarding by viewModel.isFastForwarding.collectAsStateWithLifecycle()
     val isRewinding by viewModel.isRewinding.collectAsStateWithLifecycle()
     val isAutoLaunchOnUsb by viewModel.isAutoLaunchOnUsb.collectAsStateWithLifecycle()
+    val screenScale by viewModel.screenScale.collectAsStateWithLifecycle()
+    val fontSizeScale by viewModel.fontSizeScale.collectAsStateWithLifecycle()
+    val swcConfig by viewModel.swcConfig.collectAsStateWithLifecycle()
+    val swcLiveKeyLog by viewModel.swcLiveKeyLog.collectAsStateWithLifecycle()
+
+    val showClock by viewModel.showClock.collectAsStateWithLifecycle()
+    val showDate by viewModel.showDate.collectAsStateWithLifecycle()
+    val showTemp by viewModel.showTemp.collectAsStateWithLifecycle()
+    val showSpeed by viewModel.showSpeed.collectAsStateWithLifecycle()
+    val ambientTemp by viewModel.ambientTemp.collectAsStateWithLifecycle()
+    val carSpeed by viewModel.carSpeed.collectAsStateWithLifecycle()
+
+    val isSelectionMode by viewModel.isSelectionMode.collectAsStateWithLifecycle()
+    val selectedIds by viewModel.selectedItems.collectAsStateWithLifecycle()
+
+    var selectedItemForAction by remember { mutableStateOf<MediaItemEntity?>(null) }
+    var itemForAddToPlaylist by remember { mutableStateOf<MediaItemEntity?>(null) }
+    var itemForDelete by remember { mutableStateOf<MediaItemEntity?>(null) }
+    var showCreatePlaylistDialog by remember { mutableStateOf(false) }
+    var createPlaylistIsVideo by remember { mutableStateOf(false) }
+    var playlistToDelete by remember { mutableStateOf<CustomPlaylistEntity?>(null) }
+
+    val customMusicPlaylists by viewModel.customMusicPlaylists.collectAsStateWithLifecycle()
+    val customVideoPlaylists by viewModel.customVideoPlaylists.collectAsStateWithLifecycle()
+    val playlistItemCounts by viewModel.playlistItemCounts.collectAsStateWithLifecycle()
+    val selectedCustomMusicPlaylist by viewModel.selectedCustomMusicPlaylist.collectAsStateWithLifecycle()
+    val selectedCustomVideoPlaylist by viewModel.selectedCustomVideoPlaylist.collectAsStateWithLifecycle()
 
     Box(
         modifier = modifier
@@ -101,6 +129,14 @@ fun CarMediaPlayerScreen(
         }
         // 2. TRUE FULLSCREEN AUDIO PLAYER OVERLAY
         else if (isNowPlayingFullscreen && currentPlaying != null && currentPlaying?.isVideo == false) {
+            val showVisualizerBars by viewModel.showVisualizerBars.collectAsStateWithLifecycle()
+            val showClock by viewModel.showClock.collectAsStateWithLifecycle()
+            val showDate by viewModel.showDate.collectAsStateWithLifecycle()
+            val showTemp by viewModel.showTemp.collectAsStateWithLifecycle()
+            val showSpeed by viewModel.showSpeed.collectAsStateWithLifecycle()
+            val carSpeed by viewModel.carSpeed.collectAsStateWithLifecycle()
+            val ambientTemp by viewModel.ambientTemp.collectAsStateWithLifecycle()
+
             FullscreenAudioPlayer(
                 item = currentPlaying!!,
                 isPlaying = isPlaying,
@@ -108,6 +144,8 @@ fun CarMediaPlayerScreen(
                 playbackDuration = playbackDuration,
                 repeatMode = repeatMode,
                 isShuffleEnabled = isShuffleEnabled,
+                showVisualizerBars = showVisualizerBars,
+                onToggleVisualizerBars = { viewModel.setShowVisualizerBars(it) },
                 isFastForwarding = isFastForwarding,
                 isRewinding = isRewinding,
                 onPlayPauseToggle = { viewModel.togglePlayPause() },
@@ -120,7 +158,13 @@ fun CarMediaPlayerScreen(
                 onSeek = { viewModel.seekTo(it) },
                 onToggleRepeat = { viewModel.toggleRepeatMode() },
                 onToggleShuffle = { viewModel.toggleShuffle() },
-                onMinimize = { viewModel.setNowPlayingFullscreen(false) }
+                onMinimize = { viewModel.setNowPlayingFullscreen(false) },
+                showClock = showClock,
+                showDate = showDate,
+                showTemp = showTemp,
+                showSpeed = showSpeed,
+                carSpeed = carSpeed,
+                ambientTemp = ambientTemp
             )
         }
         // 3. STANDARD CAR DASHBOARD INTERFACE
@@ -219,6 +263,14 @@ fun CarMediaPlayerScreen(
                                     playbackDuration = playbackDuration,
                                     repeatMode = repeatMode,
                                     isShuffleEnabled = isShuffleEnabled,
+                                    selectedIds = selectedIds,
+                                    isSelectionMode = isSelectionMode,
+                                    onTrackLongClick = { selectedItemForAction = it },
+                                    onCreatePlaylistClick = {
+                                        createPlaylistIsVideo = false
+                                        showCreatePlaylistDialog = true
+                                    },
+                                    onDeleteCustomPlaylist = { playlistToDelete = it },
                                     isCompact = true
                                 )
                                 1 -> VideoTabContent(
@@ -229,6 +281,14 @@ fun CarMediaPlayerScreen(
                                     playbackProgress = playbackProgress,
                                     playbackDuration = playbackDuration,
                                     isVideoFullscreen = isVideoFullscreen,
+                                    selectedIds = selectedIds,
+                                    isSelectionMode = isSelectionMode,
+                                    onVideoLongClick = { selectedItemForAction = it },
+                                    onCreatePlaylistClick = {
+                                        createPlaylistIsVideo = true
+                                        showCreatePlaylistDialog = true
+                                    },
+                                    onDeleteCustomPlaylist = { playlistToDelete = it },
                                     isCompact = true
                                 )
                                 2 -> UsbAndSettingsTabContent(
@@ -252,7 +312,38 @@ fun CarMediaPlayerScreen(
                                     isFullscreenMode = isFullscreenMode,
                                     onFullscreenModeToggle = { viewModel.setFullscreenMode(it) },
                                     isAutoLaunchOnUsb = isAutoLaunchOnUsb,
-                                    onAutoLaunchOnUsbToggle = { viewModel.setAutoLaunchOnUsb(it) }
+                                    onAutoLaunchOnUsbToggle = { viewModel.setAutoLaunchOnUsb(it) },
+                                    screenScale = screenScale,
+                                    onScreenScaleChanged = { viewModel.setScreenScale(it) },
+                                    fontSizeScale = fontSizeScale,
+                                    onFontSizeScaleChanged = { viewModel.setFontSizeScale(it) },
+                                    swcConfig = swcConfig,
+                                    onSwcPresetSelected = { viewModel.setSwcPreset(it) },
+                                    onSwcDualPressModeSelected = { viewModel.setSwcDualPressMode(it) },
+                                    onSwcDualPressWindowChanged = { viewModel.setSwcDualPressWindowMs(it) },
+                                    onSwcDedicatedPauseToggled = { viewModel.setSwcDedicatedPause(it) },
+                                    onSwcLongPressModeSelected = { viewModel.setSwcLongPressMode(it) },
+                                    onSwcLongPressThresholdChanged = { viewModel.setSwcLongPressThresholdMs(it) },
+                                    onSwcSeekStepChanged = { viewModel.setSwcSeekStepSeconds(it) },
+                                    onSwcAcceptExtendedKeysToggled = { viewModel.setSwcAcceptExtendedKeys(it) },
+                                    onSwcDebounceChanged = { viewModel.setSwcDebounceMs(it) },
+                                    onSwcCustomButton1Changed = { viewModel.setSwcCustomButton1(it) },
+                                    onSwcCustomButton2Changed = { viewModel.setSwcCustomButton2(it) },
+                                    onSwcCustomPlayPauseChanged = { viewModel.setSwcCustomPlayPause(it) },
+                                    onSwcCustomAccelerationChanged = { viewModel.setSwcCustomAcceleration(it) },
+                                    onSwcWheelModeChanged = { viewModel.setSwcWheelMode(it) },
+                                    onSwcProtocolChanged = { viewModel.setSwcProtocol(it) },
+                                    ambientTemp = ambientTemp,
+                                    carSpeed = carSpeed,
+                                    swcLiveKeyLog = swcLiveKeyLog,
+                                    showClock = showClock,
+                                    onShowClockToggle = { viewModel.setShowClock(it) },
+                                    showDate = showDate,
+                                    onShowDateToggle = { viewModel.setShowDate(it) },
+                                    showTemp = showTemp,
+                                    onShowTempToggle = { viewModel.setShowTemp(it) },
+                                    showSpeed = showSpeed,
+                                    onShowSpeedToggle = { viewModel.setShowSpeed(it) }
                                 )
                             }
                         }
@@ -410,6 +501,14 @@ fun CarMediaPlayerScreen(
                                     playbackDuration = playbackDuration,
                                     repeatMode = repeatMode,
                                     isShuffleEnabled = isShuffleEnabled,
+                                    selectedIds = selectedIds,
+                                    isSelectionMode = isSelectionMode,
+                                    onTrackLongClick = { selectedItemForAction = it },
+                                    onCreatePlaylistClick = {
+                                        createPlaylistIsVideo = false
+                                        showCreatePlaylistDialog = true
+                                    },
+                                    onDeleteCustomPlaylist = { playlistToDelete = it },
                                     isCompact = isCompactLayout
                                 )
                                 1 -> VideoTabContent(
@@ -420,6 +519,14 @@ fun CarMediaPlayerScreen(
                                     playbackProgress = playbackProgress,
                                     playbackDuration = playbackDuration,
                                     isVideoFullscreen = isVideoFullscreen,
+                                    selectedIds = selectedIds,
+                                    isSelectionMode = isSelectionMode,
+                                    onVideoLongClick = { selectedItemForAction = it },
+                                    onCreatePlaylistClick = {
+                                        createPlaylistIsVideo = true
+                                        showCreatePlaylistDialog = true
+                                    },
+                                    onDeleteCustomPlaylist = { playlistToDelete = it },
                                     isCompact = isCompactLayout
                                 )
                                 2 -> UsbAndSettingsTabContent(
@@ -443,7 +550,38 @@ fun CarMediaPlayerScreen(
                                     isFullscreenMode = isFullscreenMode,
                                     onFullscreenModeToggle = { viewModel.setFullscreenMode(it) },
                                     isAutoLaunchOnUsb = isAutoLaunchOnUsb,
-                                    onAutoLaunchOnUsbToggle = { viewModel.setAutoLaunchOnUsb(it) }
+                                    onAutoLaunchOnUsbToggle = { viewModel.setAutoLaunchOnUsb(it) },
+                                    screenScale = screenScale,
+                                    onScreenScaleChanged = { viewModel.setScreenScale(it) },
+                                    fontSizeScale = fontSizeScale,
+                                    onFontSizeScaleChanged = { viewModel.setFontSizeScale(it) },
+                                    swcConfig = swcConfig,
+                                    onSwcPresetSelected = { viewModel.setSwcPreset(it) },
+                                    onSwcDualPressModeSelected = { viewModel.setSwcDualPressMode(it) },
+                                    onSwcDualPressWindowChanged = { viewModel.setSwcDualPressWindowMs(it) },
+                                    onSwcDedicatedPauseToggled = { viewModel.setSwcDedicatedPause(it) },
+                                    onSwcLongPressModeSelected = { viewModel.setSwcLongPressMode(it) },
+                                    onSwcLongPressThresholdChanged = { viewModel.setSwcLongPressThresholdMs(it) },
+                                    onSwcSeekStepChanged = { viewModel.setSwcSeekStepSeconds(it) },
+                                    onSwcAcceptExtendedKeysToggled = { viewModel.setSwcAcceptExtendedKeys(it) },
+                                    onSwcDebounceChanged = { viewModel.setSwcDebounceMs(it) },
+                                    onSwcCustomButton1Changed = { viewModel.setSwcCustomButton1(it) },
+                                    onSwcCustomButton2Changed = { viewModel.setSwcCustomButton2(it) },
+                                    onSwcCustomPlayPauseChanged = { viewModel.setSwcCustomPlayPause(it) },
+                                    onSwcCustomAccelerationChanged = { viewModel.setSwcCustomAcceleration(it) },
+                                    onSwcWheelModeChanged = { viewModel.setSwcWheelMode(it) },
+                                    onSwcProtocolChanged = { viewModel.setSwcProtocol(it) },
+                                    ambientTemp = ambientTemp,
+                                    carSpeed = carSpeed,
+                                    swcLiveKeyLog = swcLiveKeyLog,
+                                    showClock = showClock,
+                                    onShowClockToggle = { viewModel.setShowClock(it) },
+                                    showDate = showDate,
+                                    onShowDateToggle = { viewModel.setShowDate(it) },
+                                    showTemp = showTemp,
+                                    onShowTempToggle = { viewModel.setShowTemp(it) },
+                                    showSpeed = showSpeed,
+                                    onShowSpeedToggle = { viewModel.setShowSpeed(it) }
                                 )
                             }
                         }
@@ -539,6 +677,113 @@ fun CarMediaPlayerScreen(
                     )
                 }
             }
+        }
+
+        // 6. MEDIA ITEM ACTION DIALOG (Long press or options click on audio/video)
+        selectedItemForAction?.let { item ->
+            val isInCustomPlaylist = if (item.isVideo) {
+                selectedCustomVideoPlaylist != null
+            } else {
+                selectedCustomMusicPlaylist != null
+            }
+            MediaItemActionDialog(
+                item = item,
+                isInCustomPlaylist = isInCustomPlaylist,
+                onDismiss = { selectedItemForAction = null },
+                onAddToPlaylistClick = {
+                    itemForAddToPlaylist = item
+                },
+                onRemoveFromPlaylistClick = if (isInCustomPlaylist) {
+                    {
+                        val currentPl = if (item.isVideo) selectedCustomVideoPlaylist else selectedCustomMusicPlaylist
+                        if (currentPl != null) {
+                            viewModel.removeItemFromPlaylist(currentPl.id, item.filePath)
+                        }
+                    }
+                } else null,
+                onDeleteClick = {
+                    itemForDelete = item
+                },
+                onSelectModeClick = {
+                    viewModel.toggleItemSelection(item.filePath)
+                },
+                isCompact = isCompactScreenMode
+            )
+        }
+
+        // 7. ADD TO PLAYLIST DIALOG
+        itemForAddToPlaylist?.let { item ->
+            val relevantPlaylists = if (item.isVideo) customVideoPlaylists else customMusicPlaylists
+            AddToPlaylistDialog(
+                item = item,
+                playlists = relevantPlaylists,
+                playlistCounts = playlistItemCounts,
+                onDismiss = { itemForAddToPlaylist = null },
+                onPlaylistSelected = { pl ->
+                    viewModel.addItemToPlaylist(pl.id, item.filePath)
+                    itemForAddToPlaylist = null
+                },
+                onCreateNewPlaylistClick = {
+                    createPlaylistIsVideo = item.isVideo
+                    showCreatePlaylistDialog = true
+                },
+                isCompact = isCompactScreenMode
+            )
+        }
+
+        // 8. CREATE PLAYLIST DIALOG
+        if (showCreatePlaylistDialog) {
+            CreatePlaylistDialog(
+                isVideo = createPlaylistIsVideo,
+                onDismiss = { showCreatePlaylistDialog = false },
+                onCreate = { name ->
+                    if (isSelectionMode) {
+                        viewModel.createPlaylist(
+                            name = name,
+                            isVideo = createPlaylistIsVideo,
+                            initialFilePaths = selectedIds.toList()
+                        )
+                    } else {
+                        val targetItem = itemForAddToPlaylist
+                        viewModel.createPlaylist(
+                            name = name,
+                            isVideo = createPlaylistIsVideo,
+                            initialFilePath = targetItem?.filePath
+                        )
+                    }
+                    itemForAddToPlaylist = null
+                    showCreatePlaylistDialog = false
+                },
+                isCompact = isCompactScreenMode
+            )
+        }
+
+        // 9. CONFIRM DELETE OF MEDIA ITEM
+        itemForDelete?.let { item ->
+            ConfirmDeleteDialog(
+                title = strings.deleteMediaItem,
+                message = "${item.title}\n\n${item.filePath}",
+                onConfirm = {
+                    viewModel.deleteMediaItem(item)
+                    itemForDelete = null
+                },
+                onDismiss = { itemForDelete = null },
+                isCompact = isCompactScreenMode
+            )
+        }
+
+        // 10. CONFIRM DELETE OF CUSTOM PLAYLIST
+        playlistToDelete?.let { pl ->
+            ConfirmDeleteDialog(
+                title = strings.deletePlaylistConfirmTitle,
+                message = pl.name,
+                onConfirm = {
+                    viewModel.deletePlaylist(pl.id)
+                    playlistToDelete = null
+                },
+                onDismiss = { playlistToDelete = null },
+                isCompact = isCompactScreenMode
+            )
         }
     }
 }
@@ -638,6 +883,11 @@ fun MusicTabContent(
     playbackDuration: Long,
     repeatMode: Int,
     isShuffleEnabled: Boolean,
+    selectedIds: Set<String> = emptySet(),
+    isSelectionMode: Boolean = false,
+    onTrackLongClick: (MediaItemEntity) -> Unit = {},
+    onCreatePlaylistClick: () -> Unit = {},
+    onDeleteCustomPlaylist: (CustomPlaylistEntity) -> Unit = {},
     isCompact: Boolean = false
 ) {
     val strings = LocalAppStrings.current
@@ -656,8 +906,36 @@ fun MusicTabContent(
     val musicVolumesList by viewModel.musicVolumesList.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
 
+    val customMusicPlaylists by viewModel.customMusicPlaylists.collectAsStateWithLifecycle()
+    val customMusicPlaylistTracks by viewModel.customMusicPlaylistTracks.collectAsStateWithLifecycle()
+    val selectedCustomMusicPlaylist by viewModel.selectedCustomMusicPlaylist.collectAsStateWithLifecycle()
+    val playlistItemCounts by viewModel.playlistItemCounts.collectAsStateWithLifecycle()
+
     val isFastForwarding by viewModel.isFastForwarding.collectAsStateWithLifecycle()
     val isRewinding by viewModel.isRewinding.collectAsStateWithLifecycle()
+    
+    var showPlaylistSelectionDialog by remember { mutableStateOf(false) }
+    var showBulkDeleteConfirm by remember { mutableStateOf(false) }
+
+    if (showPlaylistSelectionDialog) {
+        PlaylistSelectionDialog(
+            playlists = customMusicPlaylists,
+            onPlaylistSelected = { viewModel.addSelectedToPlaylist(it.id) },
+            onCreateNewPlaylist = onCreatePlaylistClick,
+            onDismiss = { showPlaylistSelectionDialog = false },
+            isCompact = isCompact
+        )
+    }
+
+    if (showBulkDeleteConfirm) {
+        ConfirmDeleteDialog(
+            title = strings.confirmDelete,
+            message = strings.bulkDeleteConfirmMessage,
+            onConfirm = { viewModel.deleteSelectedItems() },
+            onDismiss = { showBulkDeleteConfirm = false },
+            isCompact = isCompact
+        )
+    }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isNarrow = maxWidth < 620.dp
@@ -688,9 +966,24 @@ fun MusicTabContent(
                     onSelectAlbum = { viewModel.selectAlbum(it) },
                     selectedFolder = selectedFolder,
                     onSelectFolder = { viewModel.selectFolder(it) },
+                    selectedCustomPlaylist = selectedCustomMusicPlaylist,
+                    onSelectCustomPlaylist = { viewModel.selectCustomMusicPlaylist(it) },
+                    customPlaylists = customMusicPlaylists,
+                    customPlaylistCounts = playlistItemCounts,
+                    customPlaylistTracks = customMusicPlaylistTracks,
+                    onCreatePlaylistClick = onCreatePlaylistClick,
+                    onDeleteCustomPlaylist = onDeleteCustomPlaylist,
                     filteredTracks = filteredTracks,
                     currentPlaying = currentPlaying,
                     onPlayTrack = { track, list -> viewModel.playMediaItem(track, list) },
+                    onTrackLongClick = onTrackLongClick,
+                    selectedIds = selectedIds,
+                    isSelectionMode = isSelectionMode,
+                    onToggleSelection = { viewModel.toggleItemSelection(it.filePath) },
+                    onClearSelection = { viewModel.clearSelection() },
+                    onBulkDelete = { showBulkDeleteConfirm = true },
+                    onBulkAddToPlaylist = { showPlaylistSelectionDialog = true },
+                    onBulkRemoveFromPlaylist = { viewModel.removeSelectedFromPlaylist(it) },
                     artistsList = artistsList,
                     albumsList = albumsList,
                     foldersList = foldersList,
@@ -741,9 +1034,24 @@ fun MusicTabContent(
                     onSelectAlbum = { viewModel.selectAlbum(it) },
                     selectedFolder = selectedFolder,
                     onSelectFolder = { viewModel.selectFolder(it) },
+                    selectedCustomPlaylist = selectedCustomMusicPlaylist,
+                    onSelectCustomPlaylist = { viewModel.selectCustomMusicPlaylist(it) },
+                    customPlaylists = customMusicPlaylists,
+                    customPlaylistCounts = playlistItemCounts,
+                    customPlaylistTracks = customMusicPlaylistTracks,
+                    onCreatePlaylistClick = onCreatePlaylistClick,
+                    onDeleteCustomPlaylist = onDeleteCustomPlaylist,
                     filteredTracks = filteredTracks,
                     currentPlaying = currentPlaying,
                     onPlayTrack = { track, list -> viewModel.playMediaItem(track, list) },
+                    onTrackLongClick = onTrackLongClick,
+                    selectedIds = selectedIds,
+                    isSelectionMode = isSelectionMode,
+                    onToggleSelection = { viewModel.toggleItemSelection(it.filePath) },
+                    onClearSelection = { viewModel.clearSelection() },
+                    onBulkDelete = { showBulkDeleteConfirm = true },
+                    onBulkAddToPlaylist = { showPlaylistSelectionDialog = true },
+                    onBulkRemoveFromPlaylist = { viewModel.removeSelectedFromPlaylist(it) },
                     artistsList = artistsList,
                     albumsList = albumsList,
                     foldersList = foldersList,
@@ -803,6 +1111,11 @@ fun VideoTabContent(
     playbackProgress: Long,
     playbackDuration: Long,
     isVideoFullscreen: Boolean,
+    selectedIds: Set<String> = emptySet(),
+    isSelectionMode: Boolean = false,
+    onVideoLongClick: (MediaItemEntity) -> Unit = {},
+    onCreatePlaylistClick: () -> Unit = {},
+    onDeleteCustomPlaylist: (CustomPlaylistEntity) -> Unit = {},
     isCompact: Boolean = false
 ) {
     val strings = LocalAppStrings.current
@@ -821,6 +1134,34 @@ fun VideoTabContent(
     val shortClipsCount by viewModel.videoShortClipsCount.collectAsStateWithLifecycle()
     val moviesCount by viewModel.videoMoviesCount.collectAsStateWithLifecycle()
     val totalVideos by viewModel.videoList.collectAsStateWithLifecycle()
+
+    val customVideoPlaylists by viewModel.customVideoPlaylists.collectAsStateWithLifecycle()
+    val customVideoPlaylistTracks by viewModel.customVideoPlaylistTracks.collectAsStateWithLifecycle()
+    val selectedCustomVideoPlaylist by viewModel.selectedCustomVideoPlaylist.collectAsStateWithLifecycle()
+    val playlistItemCounts by viewModel.playlistItemCounts.collectAsStateWithLifecycle()
+    
+    var showPlaylistSelectionDialog by remember { mutableStateOf(false) }
+    var showBulkDeleteConfirm by remember { mutableStateOf(false) }
+
+    if (showPlaylistSelectionDialog) {
+        PlaylistSelectionDialog(
+            playlists = customVideoPlaylists,
+            onPlaylistSelected = { viewModel.addSelectedToPlaylist(it.id) },
+            onCreateNewPlaylist = onCreatePlaylistClick,
+            onDismiss = { showPlaylistSelectionDialog = false },
+            isCompact = isCompact
+        )
+    }
+
+    if (showBulkDeleteConfirm) {
+        ConfirmDeleteDialog(
+            title = strings.confirmDelete,
+            message = strings.bulkDeleteConfirmMessage,
+            onConfirm = { viewModel.deleteSelectedItems() },
+            onDismiss = { showBulkDeleteConfirm = false },
+            isCompact = isCompact
+        )
+    }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isNarrow = maxWidth < 620.dp
@@ -861,11 +1202,26 @@ fun VideoTabContent(
                     onFolderSelected = { viewModel.selectVideoFolder(it) },
                     selectedPlaylist = selectedPlaylist,
                     onPlaylistSelected = { viewModel.selectVideoPlaylist(it) },
+                    selectedCustomPlaylist = selectedCustomVideoPlaylist,
+                    onSelectCustomPlaylist = { viewModel.selectCustomVideoPlaylist(it) },
+                    customPlaylists = customVideoPlaylists,
+                    customPlaylistCounts = playlistItemCounts,
+                    customPlaylistTracks = customVideoPlaylistTracks,
+                    onCreatePlaylistClick = onCreatePlaylistClick,
+                    onDeleteCustomPlaylist = onDeleteCustomPlaylist,
                     filteredVideos = filteredVideos,
                     currentPlaying = currentPlaying,
                     favoritePaths = favoritePaths,
+                    selectedIds = selectedIds,
+                    isSelectionMode = isSelectionMode,
+                    onToggleSelection = { viewModel.toggleItemSelection(it.filePath) },
+                    onClearSelection = { viewModel.clearSelection() },
+                    onBulkDelete = { showBulkDeleteConfirm = true },
+                    onBulkAddToPlaylist = { showPlaylistSelectionDialog = true },
+                    onBulkRemoveFromPlaylist = { viewModel.removeSelectedFromPlaylist(it) },
                     onPlayVideo = { video, list -> viewModel.playMediaItem(video, list) },
                     onToggleFavorite = { viewModel.toggleVideoFavorite(it) },
+                    onVideoLongClick = onVideoLongClick,
                     foldersList = foldersList,
                     totalVideosCount = totalVideos.size,
                     favoritesCount = favoritesCount,
@@ -894,11 +1250,26 @@ fun VideoTabContent(
                     onFolderSelected = { viewModel.selectVideoFolder(it) },
                     selectedPlaylist = selectedPlaylist,
                     onPlaylistSelected = { viewModel.selectVideoPlaylist(it) },
+                    selectedCustomPlaylist = selectedCustomVideoPlaylist,
+                    onSelectCustomPlaylist = { viewModel.selectCustomVideoPlaylist(it) },
+                    customPlaylists = customVideoPlaylists,
+                    customPlaylistCounts = playlistItemCounts,
+                    customPlaylistTracks = customVideoPlaylistTracks,
+                    onCreatePlaylistClick = onCreatePlaylistClick,
+                    onDeleteCustomPlaylist = onDeleteCustomPlaylist,
                     filteredVideos = filteredVideos,
                     currentPlaying = currentPlaying,
                     favoritePaths = favoritePaths,
+                    selectedIds = selectedIds,
+                    isSelectionMode = isSelectionMode,
+                    onToggleSelection = { viewModel.toggleItemSelection(it.filePath) },
+                    onClearSelection = { viewModel.clearSelection() },
+                    onBulkDelete = { showBulkDeleteConfirm = true },
+                    onBulkAddToPlaylist = { showPlaylistSelectionDialog = true },
+                    onBulkRemoveFromPlaylist = { viewModel.removeSelectedFromPlaylist(it) },
                     onPlayVideo = { video, list -> viewModel.playMediaItem(video, list) },
                     onToggleFavorite = { viewModel.toggleVideoFavorite(it) },
+                    onVideoLongClick = onVideoLongClick,
                     foldersList = foldersList,
                     totalVideosCount = totalVideos.size,
                     favoritesCount = favoritesCount,

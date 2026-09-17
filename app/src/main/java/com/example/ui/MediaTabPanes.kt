@@ -1,26 +1,34 @@
 package com.example.ui
 
 import android.text.format.DateUtils
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.media3.common.Player
+import com.example.data.CustomPlaylistEntity
 import com.example.data.MediaItemEntity
 import com.example.localization.LocalAppStrings
 import com.example.theme.LocalCarColors
@@ -53,10 +61,34 @@ fun CompactAudioMiniBar(
     val strings = LocalAppStrings.current
     val colors = LocalCarColors.current
 
+    var totalDragX by remember { mutableFloatStateOf(0f) }
+    val animatedDragX by animateFloatAsState(
+        targetValue = totalDragX,
+        animationSpec = spring(stiffness = Spring.StiffnessLow),
+        label = "mini_bar_drag"
+    )
+
+    val swipeModifier = Modifier.pointerInput(Unit) {
+        detectHorizontalDragGestures(
+            onDragStart = { totalDragX = 0f },
+            onHorizontalDrag = { _, dragAmount -> totalDragX += dragAmount },
+            onDragEnd = {
+                val threshold = 50.dp.toPx()
+                if (kotlin.math.abs(totalDragX) > threshold) {
+                    onExpandFullscreen()
+                }
+                totalDragX = 0f
+            },
+            onDragCancel = { totalDragX = 0f }
+        )
+    }
+
     Column(
         modifier = modifier
+            .offset(x = animatedDragX.dp / 8) // Subtle visual feedback
             .background(colors.surface, RoundedCornerShape(12.dp))
             .border(1.dp, colors.accent.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+            .then(swipeModifier)
             .clickable(onClick = onExpandFullscreen)
     ) {
         val progressFraction = if (playbackDuration > 0) {
@@ -193,9 +225,24 @@ fun MusicBrowserPane(
     onSelectAlbum: (String?) -> Unit,
     selectedFolder: String?,
     onSelectFolder: (String?) -> Unit,
+    selectedCustomPlaylist: CustomPlaylistEntity? = null,
+    onSelectCustomPlaylist: (CustomPlaylistEntity?) -> Unit = {},
+    customPlaylists: List<CustomPlaylistEntity> = emptyList(),
+    customPlaylistCounts: Map<Long, Int> = emptyMap(),
+    customPlaylistTracks: List<MediaItemEntity> = emptyList(),
+    onCreatePlaylistClick: () -> Unit = {},
+    onDeleteCustomPlaylist: (CustomPlaylistEntity) -> Unit = {},
     filteredTracks: List<MediaItemEntity>,
     currentPlaying: MediaItemEntity?,
     onPlayTrack: (MediaItemEntity, List<MediaItemEntity>) -> Unit,
+    onTrackLongClick: ((MediaItemEntity) -> Unit)? = null,
+    selectedIds: Set<String> = emptySet(),
+    isSelectionMode: Boolean = false,
+    onToggleSelection: (MediaItemEntity) -> Unit = {},
+    onClearSelection: () -> Unit = {},
+    onBulkDelete: () -> Unit = {},
+    onBulkAddToPlaylist: () -> Unit = {},
+    onBulkRemoveFromPlaylist: (Long) -> Unit = {},
     artistsList: List<ArtistGroup>,
     albumsList: List<AlbumGroup>,
     foldersList: List<FolderGroup>,
@@ -211,9 +258,29 @@ fun MusicBrowserPane(
             .border(1.dp, colors.cardBorder, RoundedCornerShape(16.dp))
             .padding(if (isCompact) 8.dp else 12.dp)
     ) {
+        if (isSelectionMode) {
+            SelectionActionToolbar(
+                selectedCount = selectedIds.size,
+                onClearSelection = onClearSelection,
+                onAddToPlaylist = onBulkAddToPlaylist,
+                onDelete = onBulkDelete,
+                onRemoveFromPlaylist = if (selectedCustomPlaylist != null) {
+                    { onBulkRemoveFromPlaylist(selectedCustomPlaylist.id) }
+                } else null,
+                isCompact = isCompact
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
         MusicCategorySelector(
             selectedCategory = currentCategory,
-            onCategorySelected = onCategorySelected,
+            onCategorySelected = {
+                onCategorySelected(it)
+                onSelectArtist(null)
+                onSelectAlbum(null)
+                onSelectFolder(null)
+                onSelectCustomPlaylist(null)
+            },
             volumes = volumes,
             selectedVolumeId = selectedVolumeId,
             onVolumeSelected = onVolumeSelected,
@@ -264,7 +331,77 @@ fun MusicBrowserPane(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        when (currentCategory) {
+        val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+        var totalDragX by remember { mutableFloatStateOf(0f) }
+        val musicCategories = remember {
+            listOf(
+                MusicCategory.ALL,
+                MusicCategory.ARTISTS,
+                MusicCategory.ALBUMS,
+                MusicCategory.FOLDERS,
+                MusicCategory.PLAYLISTS,
+                MusicCategory.DRIVES
+            )
+        }
+
+        val categorySwipeModifier = Modifier.pointerInput(
+            currentCategory,
+            selectedArtist,
+            selectedAlbum,
+            selectedFolder,
+            selectedCustomPlaylist,
+            selectedVolumeId,
+            isRtl
+        ) {
+            detectHorizontalDragGestures(
+                onDragStart = { totalDragX = 0f },
+                onHorizontalDrag = { _, dragAmount ->
+                    totalDragX += dragAmount
+                },
+                onDragEnd = {
+                    val swipeThreshold = 50.dp.toPx()
+                    val isNext = if (isRtl) totalDragX > swipeThreshold else totalDragX < -swipeThreshold
+                    val isPrev = if (isRtl) totalDragX < -swipeThreshold else totalDragX > swipeThreshold
+
+                    if (isNext) {
+                        onSelectArtist(null)
+                        onSelectAlbum(null)
+                        onSelectFolder(null)
+                        onSelectCustomPlaylist(null)
+                        if (selectedVolumeId != null) onVolumeSelected("")
+                        val currentIndex = musicCategories.indexOf(currentCategory)
+                        if (currentIndex in 0 until musicCategories.size - 1) {
+                            onCategorySelected(musicCategories[currentIndex + 1])
+                        }
+                    } else if (isPrev) {
+                        if (selectedArtist != null) {
+                            onSelectArtist(null)
+                        } else if (selectedAlbum != null) {
+                            onSelectAlbum(null)
+                        } else if (selectedFolder != null) {
+                            onSelectFolder(null)
+                        } else if (selectedCustomPlaylist != null) {
+                            onSelectCustomPlaylist(null)
+                        } else if (selectedVolumeId != null) {
+                            onVolumeSelected("")
+                        } else {
+                            val currentIndex = musicCategories.indexOf(currentCategory)
+                            if (currentIndex > 0) {
+                                onCategorySelected(musicCategories[currentIndex - 1])
+                            }
+                        }
+                    }
+                }
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .then(categorySwipeModifier)
+        ) {
+            when (currentCategory) {
             MusicCategory.ARTISTS -> {
                 if (selectedArtist != null) {
                     SubListHeader(
@@ -277,7 +414,11 @@ fun MusicBrowserPane(
                         tracks = filteredTracks,
                         currentPlaying = currentPlaying,
                         isPlaying = currentPlaying != null,
-                        onTrackClick = { onPlayTrack(it, filteredTracks) }
+                        selectedIds = selectedIds,
+                        isSelectionMode = isSelectionMode,
+                        onTrackClick = { onPlayTrack(it, filteredTracks) },
+                        onTrackLongClick = onTrackLongClick,
+                        onToggleSelection = onToggleSelection
                     )
                 } else {
                     ArtistsListView(
@@ -298,7 +439,11 @@ fun MusicBrowserPane(
                         tracks = filteredTracks,
                         currentPlaying = currentPlaying,
                         isPlaying = currentPlaying != null,
-                        onTrackClick = { onPlayTrack(it, filteredTracks) }
+                        selectedIds = selectedIds,
+                        isSelectionMode = isSelectionMode,
+                        onTrackClick = { onPlayTrack(it, filteredTracks) },
+                        onTrackLongClick = onTrackLongClick,
+                        onToggleSelection = onToggleSelection
                     )
                 } else {
                     AlbumsListView(
@@ -319,7 +464,11 @@ fun MusicBrowserPane(
                         tracks = filteredTracks,
                         currentPlaying = currentPlaying,
                         isPlaying = currentPlaying != null,
-                        onTrackClick = { onPlayTrack(it, filteredTracks) }
+                        selectedIds = selectedIds,
+                        isSelectionMode = isSelectionMode,
+                        onTrackClick = { onPlayTrack(it, filteredTracks) },
+                        onTrackLongClick = onTrackLongClick,
+                        onToggleSelection = onToggleSelection
                     )
                 } else {
                     FoldersListView(
@@ -333,8 +482,42 @@ fun MusicBrowserPane(
                     tracks = filteredTracks,
                     currentPlaying = currentPlaying,
                     isPlaying = currentPlaying != null,
-                    onTrackClick = { onPlayTrack(it, filteredTracks) }
+                    selectedIds = selectedIds,
+                    isSelectionMode = isSelectionMode,
+                    onTrackClick = { onPlayTrack(it, filteredTracks) },
+                    onTrackLongClick = onTrackLongClick,
+                    onToggleSelection = onToggleSelection
                 )
+            }
+            MusicCategory.PLAYLISTS -> {
+                if (selectedCustomPlaylist != null) {
+                    SubListHeader(
+                        title = selectedCustomPlaylist.name,
+                        subtitle = strings.backToMusicPlaylists,
+                        onBack = { onSelectCustomPlaylist(null) }
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    TracksListView(
+                        tracks = customPlaylistTracks,
+                        currentPlaying = currentPlaying,
+                        isPlaying = currentPlaying != null,
+                        selectedIds = selectedIds,
+                        isSelectionMode = isSelectionMode,
+                        onTrackClick = { onPlayTrack(it, customPlaylistTracks) },
+                        onTrackLongClick = onTrackLongClick,
+                        onToggleSelection = onToggleSelection
+                    )
+                } else {
+                    CustomPlaylistsListView(
+                        playlists = customPlaylists,
+                        playlistCounts = customPlaylistCounts,
+                        isVideo = false,
+                        onPlaylistClick = { onSelectCustomPlaylist(it) },
+                        onCreatePlaylistClick = onCreatePlaylistClick,
+                        onDeletePlaylistClick = onDeleteCustomPlaylist,
+                        isCompact = isCompact
+                    )
+                }
             }
             MusicCategory.DRIVES -> {
                 if (selectedVolumeId != null) {
@@ -343,14 +526,18 @@ fun MusicBrowserPane(
                     SubListHeader(
                         title = driveTitle,
                         subtitle = strings.backToStorageDrives,
-                        onBack = { onSelectFolder(null) }
+                        onBack = { onVolumeSelected(selectedVolumeId) }
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     TracksListView(
                         tracks = filteredTracks,
                         currentPlaying = currentPlaying,
                         isPlaying = currentPlaying != null,
-                        onTrackClick = { onPlayTrack(it, filteredTracks) }
+                        selectedIds = selectedIds,
+                        isSelectionMode = isSelectionMode,
+                        onTrackClick = { onPlayTrack(it, filteredTracks) },
+                        onTrackLongClick = onTrackLongClick,
+                        onToggleSelection = onToggleSelection
                     )
                 } else {
                     MusicDrivesListView(
@@ -360,6 +547,7 @@ fun MusicBrowserPane(
                     )
                 }
             }
+        }
         }
     }
 }
@@ -394,10 +582,34 @@ fun MusicNowPlayingPane(
     val strings = LocalAppStrings.current
     val colors = LocalCarColors.current
 
+    var totalDragX by remember { mutableFloatStateOf(0f) }
+    val animatedDragX by animateFloatAsState(
+        targetValue = totalDragX,
+        animationSpec = spring(stiffness = Spring.StiffnessLow),
+        label = "pane_drag"
+    )
+
+    val swipeModifier = Modifier.pointerInput(Unit) {
+        detectHorizontalDragGestures(
+            onDragStart = { totalDragX = 0f },
+            onHorizontalDrag = { _, dragAmount -> totalDragX += dragAmount },
+            onDragEnd = {
+                val threshold = 50.dp.toPx()
+                if (kotlin.math.abs(totalDragX) > threshold) {
+                    onFullscreenExpand()
+                }
+                totalDragX = 0f
+            },
+            onDragCancel = { totalDragX = 0f }
+        )
+    }
+
     Column(
         modifier = modifier
+            .offset(x = animatedDragX.dp / 8) // Subtle visual feedback
             .background(colors.surface, RoundedCornerShape(16.dp))
             .border(1.dp, colors.cardBorder, RoundedCornerShape(16.dp))
+            .then(swipeModifier)
             .padding(if (isCompact) 8.dp else 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
@@ -599,11 +811,26 @@ fun VideoBrowserPane(
     onFolderSelected: (String?) -> Unit,
     selectedPlaylist: VideoPlaylistType?,
     onPlaylistSelected: (VideoPlaylistType?) -> Unit,
+    selectedCustomPlaylist: CustomPlaylistEntity? = null,
+    onSelectCustomPlaylist: (CustomPlaylistEntity?) -> Unit = {},
+    customPlaylists: List<CustomPlaylistEntity> = emptyList(),
+    customPlaylistCounts: Map<Long, Int> = emptyMap(),
+    customPlaylistTracks: List<MediaItemEntity> = emptyList(),
+    onCreatePlaylistClick: () -> Unit = {},
+    onDeleteCustomPlaylist: (CustomPlaylistEntity) -> Unit = {},
     filteredVideos: List<MediaItemEntity>,
     currentPlaying: MediaItemEntity?,
     favoritePaths: Set<String>,
+    selectedIds: Set<String> = emptySet(),
+    isSelectionMode: Boolean = false,
+    onToggleSelection: (MediaItemEntity) -> Unit = {},
+    onClearSelection: () -> Unit = {},
+    onBulkDelete: () -> Unit = {},
+    onBulkAddToPlaylist: () -> Unit = {},
+    onBulkRemoveFromPlaylist: (Long) -> Unit = {},
     onPlayVideo: (MediaItemEntity, List<MediaItemEntity>) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    onVideoLongClick: ((MediaItemEntity) -> Unit)? = null,
     foldersList: List<FolderGroup>,
     totalVideosCount: Int,
     favoritesCount: Int,
@@ -621,6 +848,20 @@ fun VideoBrowserPane(
             .border(1.dp, colors.cardBorder, RoundedCornerShape(16.dp))
             .padding(if (isCompact) 8.dp else 12.dp)
     ) {
+        if (isSelectionMode) {
+            SelectionActionToolbar(
+                selectedCount = selectedIds.size,
+                onClearSelection = onClearSelection,
+                onAddToPlaylist = onBulkAddToPlaylist,
+                onDelete = onBulkDelete,
+                onRemoveFromPlaylist = if (selectedCustomPlaylist != null) {
+                    { onBulkRemoveFromPlaylist(selectedCustomPlaylist.id) }
+                } else null,
+                isCompact = isCompact
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
         VideoCategorySelector(
             selectedCategory = currentCategory,
             onCategorySelected = {
@@ -628,6 +869,7 @@ fun VideoBrowserPane(
                 onFolderSelected(null)
                 onPlaylistSelected(null)
                 onVolumeSelected(null)
+                onSelectCustomPlaylist(null)
             },
             volumes = drivesList,
             selectedVolumeId = selectedVolume,
@@ -636,13 +878,98 @@ fun VideoBrowserPane(
                 onFolderSelected(null)
                 onPlaylistSelected(null)
                 onVolumeSelected(volumeId)
+                onSelectCustomPlaylist(null)
             },
             isCompact = isCompact
         )
 
         Spacer(modifier = Modifier.height(if (isCompact) 6.dp else 8.dp))
 
-        when {
+        val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+        var videoDragX by remember { mutableFloatStateOf(0f) }
+        val videoCategories = remember {
+            listOf(
+                VideoCategory.ALL,
+                VideoCategory.FOLDERS,
+                VideoCategory.PLAYLISTS,
+                VideoCategory.DRIVES
+            )
+        }
+
+        val videoCategorySwipeModifier = Modifier.pointerInput(
+            currentCategory,
+            selectedFolder,
+            selectedPlaylist,
+            selectedCustomPlaylist,
+            selectedVolume,
+            isRtl
+        ) {
+            detectHorizontalDragGestures(
+                onDragStart = { videoDragX = 0f },
+                onHorizontalDrag = { _, dragAmount ->
+                    videoDragX += dragAmount
+                },
+                onDragEnd = {
+                    val swipeThreshold = 50.dp.toPx()
+                    val isNext = if (isRtl) videoDragX > swipeThreshold else videoDragX < -swipeThreshold
+                    val isPrev = if (isRtl) videoDragX < -swipeThreshold else videoDragX > swipeThreshold
+
+                    if (isNext) {
+                        onFolderSelected(null)
+                        onPlaylistSelected(null)
+                        onSelectCustomPlaylist(null)
+                        onVolumeSelected(null)
+                        val currentIndex = videoCategories.indexOf(currentCategory)
+                        if (currentIndex in 0 until videoCategories.size - 1) {
+                            onCategorySelected(videoCategories[currentIndex + 1])
+                        }
+                    } else if (isPrev) {
+                        if (selectedCustomPlaylist != null) {
+                            onSelectCustomPlaylist(null)
+                        } else if (selectedFolder != null) {
+                            onFolderSelected(null)
+                        } else if (selectedPlaylist != null) {
+                            onPlaylistSelected(null)
+                        } else if (selectedVolume != null) {
+                            onVolumeSelected(null)
+                        } else {
+                            val currentIndex = videoCategories.indexOf(currentCategory)
+                            if (currentIndex > 0) {
+                                onCategorySelected(videoCategories[currentIndex - 1])
+                            }
+                        }
+                    }
+                }
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .then(videoCategorySwipeModifier)
+        ) {
+            when {
+            selectedCustomPlaylist != null -> {
+                SubListHeader(
+                    title = selectedCustomPlaylist.name,
+                    subtitle = String.format(strings.videoCountLabel, customPlaylistTracks.size),
+                    onBack = { onSelectCustomPlaylist(null) }
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                VideoItemsListView(
+                    videos = customPlaylistTracks,
+                    currentPlaying = currentPlaying,
+                    favoritePaths = favoritePaths,
+                    selectedIds = selectedIds,
+                    isSelectionMode = isSelectionMode,
+                    onVideoClick = { onPlayVideo(it, customPlaylistTracks) },
+                    onToggleFavorite = onToggleFavorite,
+                    onVideoLongClick = onVideoLongClick,
+                    onToggleSelection = onToggleSelection,
+                    isCompact = isCompact
+                )
+            }
             selectedFolder != null -> {
                 SubListHeader(
                     title = File(selectedFolder).name.ifEmpty { "Root" },
@@ -654,8 +981,12 @@ fun VideoBrowserPane(
                     videos = filteredVideos,
                     currentPlaying = currentPlaying,
                     favoritePaths = favoritePaths,
+                    selectedIds = selectedIds,
+                    isSelectionMode = isSelectionMode,
                     onVideoClick = { onPlayVideo(it, filteredVideos) },
                     onToggleFavorite = onToggleFavorite,
+                    onVideoLongClick = onVideoLongClick,
+                    onToggleSelection = onToggleSelection,
                     isCompact = isCompact
                 )
             }
@@ -676,8 +1007,12 @@ fun VideoBrowserPane(
                     videos = filteredVideos,
                     currentPlaying = currentPlaying,
                     favoritePaths = favoritePaths,
+                    selectedIds = selectedIds,
+                    isSelectionMode = isSelectionMode,
                     onVideoClick = { onPlayVideo(it, filteredVideos) },
                     onToggleFavorite = onToggleFavorite,
+                    onVideoLongClick = onVideoLongClick,
+                    onToggleSelection = onToggleSelection,
                     isCompact = isCompact
                 )
             }
@@ -695,8 +1030,12 @@ fun VideoBrowserPane(
                     videos = filteredVideos,
                     currentPlaying = currentPlaying,
                     favoritePaths = favoritePaths,
+                    selectedIds = selectedIds,
+                    isSelectionMode = isSelectionMode,
                     onVideoClick = { onPlayVideo(it, filteredVideos) },
                     onToggleFavorite = onToggleFavorite,
+                    onVideoLongClick = onVideoLongClick,
+                    onToggleSelection = onToggleSelection,
                     isCompact = isCompact
                 )
             }
@@ -715,8 +1054,12 @@ fun VideoBrowserPane(
                             videos = filteredVideos,
                             currentPlaying = currentPlaying,
                             favoritePaths = favoritePaths,
+                            selectedIds = selectedIds,
+                            isSelectionMode = isSelectionMode,
                             onVideoClick = { onPlayVideo(it, filteredVideos) },
                             onToggleFavorite = onToggleFavorite,
+                            onVideoLongClick = onVideoLongClick,
+                            onToggleSelection = onToggleSelection,
                             isCompact = isCompact
                         )
                     }
@@ -733,7 +1076,12 @@ fun VideoBrowserPane(
                             shortClipsCount = shortClipsCount,
                             moviesCount = moviesCount,
                             recentCount = totalVideosCount,
+                            customPlaylists = customPlaylists,
+                            customPlaylistCounts = customPlaylistCounts,
                             onPlaylistSelected = onPlaylistSelected,
+                            onCustomPlaylistSelected = onSelectCustomPlaylist,
+                            onCreatePlaylistClick = onCreatePlaylistClick,
+                            onDeleteCustomPlaylist = onDeleteCustomPlaylist,
                             isCompact = isCompact
                         )
                     }
@@ -748,4 +1096,5 @@ fun VideoBrowserPane(
             }
         }
     }
+}
 }

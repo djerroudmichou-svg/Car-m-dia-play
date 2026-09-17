@@ -13,9 +13,11 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import com.example.data.CustomPlaylistEntity
 import com.example.data.MediaDatabase
 import com.example.data.MediaItemEntity
 import com.example.data.MediaRepository
+import com.example.data.PlaylistItemEntity
 import com.example.data.VolumeEntity
 import com.example.localization.AppLanguage
 import com.example.localization.AppStrings
@@ -23,12 +25,26 @@ import com.example.localization.LocalizationManager
 import com.example.scanner.UsbEvent
 import com.example.scanner.UsbMediaScanner
 import com.example.service.PlaybackService
+import com.example.swc.SwcConfig
+import com.example.swc.SwcDualPressMode
+import com.example.swc.SwcKeyTracker
+import com.example.swc.SwcLiveKeyLog
+import com.example.swc.SwcLongPressMode
+import com.example.swc.SwcPresetProfile
+import com.example.swc.SwcSettingsManager
+import com.example.swc.CanBusWheelMode
+import com.example.swc.CanBusProtocol
+import com.example.telemetry.CarTelemetryManager
 import com.example.theme.CarThemeManager
 import com.example.theme.DynamicColorExtractor
 import com.example.theme.ThemeMode
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
+import kotlin.random.Random
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
@@ -38,6 +54,7 @@ enum class MusicCategory {
     ARTISTS,
     ALBUMS,
     FOLDERS,
+    PLAYLISTS,
     DRIVES
 }
 
@@ -140,6 +157,8 @@ class MediaViewModel(
     val isKeepScreenOn: StateFlow<Boolean> = themeManager.isKeepScreenOn
     val isFullscreenMode: StateFlow<Boolean> = themeManager.isFullscreenMode
     val isAutoLaunchOnUsb: StateFlow<Boolean> = themeManager.isAutoLaunchOnUsb
+    val screenScale: StateFlow<Float> = themeManager.screenScale
+    val fontSizeScale: StateFlow<Float> = themeManager.fontSizeScale
 
     fun setThemeMode(mode: ThemeMode) {
         themeManager.setThemeMode(mode)
@@ -163,6 +182,75 @@ class MediaViewModel(
 
     fun setAutoLaunchOnUsb(enabled: Boolean) {
         themeManager.setAutoLaunchOnUsb(enabled)
+    }
+
+    fun setScreenScale(scale: Float) {
+        themeManager.setScreenScale(scale)
+    }
+
+    fun setFontSizeScale(scale: Float) {
+        themeManager.setFontSizeScale(scale)
+    }
+
+    // --- Steering Wheel Controls (SWC) Settings & Tracker ---
+    val swcSettingsManager = SwcSettingsManager(application)
+    val swcConfig: StateFlow<SwcConfig> = swcSettingsManager.config
+
+    val swcKeyTracker = SwcKeyTracker(
+        config = swcConfig.value,
+        onPlayPauseComboTriggered = {
+            togglePlayPause()
+            val strings = appStrings.value
+            _usbNotification.value = UsbNotification(strings.swcSimultaneousToggleToast, true)
+            scheduleUsbNotificationDismiss()
+        },
+        onNextTrack = { playNext() },
+        onPrevTrack = { playPrevious() },
+        onFastForwardStart = { startFastForward() },
+        onFastForwardEnd = { stopFastForward() },
+        onRewindStart = { startRewind() },
+        onRewindEnd = { stopRewind() },
+        onSeekStepForward = { seconds -> seekBy(seconds * 1000L) },
+        onSeekStepBackward = { seconds -> seekBy(-seconds * 1000L) },
+        onSkipNextFolder = { skipToNextFolder() },
+        onSkipPrevFolder = { skipToPrevFolder() }
+    )
+
+    val swcLiveKeyLog: StateFlow<SwcLiveKeyLog?> = swcKeyTracker.liveKeyLog
+
+    fun setSwcPreset(preset: SwcPresetProfile) { swcSettingsManager.applyPreset(preset) }
+    fun setSwcDualPressMode(mode: SwcDualPressMode) { swcSettingsManager.setDualPressMode(mode) }
+    fun setSwcDualPressWindowMs(windowMs: Long) { swcSettingsManager.setDualPressWindowMs(windowMs) }
+    fun setSwcDedicatedPause(enabled: Boolean) { swcSettingsManager.setHasDedicatedPauseButton(enabled) }
+    fun setSwcLongPressMode(mode: SwcLongPressMode) { swcSettingsManager.setLongPressMode(mode) }
+    fun setSwcLongPressThresholdMs(thresholdMs: Long) { swcSettingsManager.setLongPressThresholdMs(thresholdMs) }
+    fun setSwcSeekStepSeconds(seconds: Int) { swcSettingsManager.setSeekStepSeconds(seconds) }
+    fun setSwcAcceptExtendedKeys(enabled: Boolean) { swcSettingsManager.setAcceptExtendedKeys(enabled) }
+    fun setSwcDebounceMs(debounceMs: Long) { swcSettingsManager.setDebounceMs(debounceMs) }
+    fun setSwcCustomButton1(keyCode: Int) { swcSettingsManager.setCustomButton1KeyCode(keyCode) }
+    fun setSwcCustomButton2(keyCode: Int) { swcSettingsManager.setCustomButton2KeyCode(keyCode) }
+    fun setSwcCustomPlayPause(keyCode: Int) { swcSettingsManager.setCustomPlayPauseKeyCode(keyCode) }
+    fun setSwcCustomAcceleration(factor: Int) { swcSettingsManager.setCustomLongPressAcceleration(factor) }
+    fun setSwcWheelMode(mode: CanBusWheelMode) { swcSettingsManager.setCanBusWheelMode(mode) }
+    fun setSwcProtocol(protocol: CanBusProtocol) { swcSettingsManager.setCanBusProtocol(protocol) }
+
+    fun seekBy(offsetMs: Long) {
+        val p = activePlayer
+        val cur = p?.currentPosition ?: _playbackProgress.value
+        val dur = _playbackDuration.value
+        val nextPos = if (dur > 0) (cur + offsetMs).coerceIn(0L, dur) else (cur + offsetMs).coerceAtLeast(0L)
+        seekTo(nextPos)
+    }
+
+    fun skipToNextFolder() { playNext() }
+    fun skipToPrevFolder() { playPrevious() }
+
+    private fun scheduleUsbNotificationDismiss() {
+        usbDismissJob?.cancel()
+        usbDismissJob = viewModelScope.launch {
+            delay(4000L)
+            _usbNotification.value = null
+        }
     }
 
     private val _dynamicAccentColor = MutableStateFlow<Color?>(null)
@@ -201,6 +289,9 @@ class MediaViewModel(
     private val _selectedMusicVolume = MutableStateFlow<String?>(null)
     val selectedMusicVolume: StateFlow<String?> = _selectedMusicVolume.asStateFlow()
 
+    private val _selectedCustomMusicPlaylist = MutableStateFlow<CustomPlaylistEntity?>(null)
+    val selectedCustomMusicPlaylist: StateFlow<CustomPlaylistEntity?> = _selectedCustomMusicPlaylist.asStateFlow()
+
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
@@ -213,6 +304,32 @@ class MediaViewModel(
 
     private val _selectedVideoPlaylist = MutableStateFlow<VideoPlaylistType?>(null)
     val selectedVideoPlaylist: StateFlow<VideoPlaylistType?> = _selectedVideoPlaylist.asStateFlow()
+
+    private val _selectedCustomVideoPlaylist = MutableStateFlow<CustomPlaylistEntity?>(null)
+    val selectedCustomVideoPlaylist: StateFlow<CustomPlaylistEntity?> = _selectedCustomVideoPlaylist.asStateFlow()
+
+    val customMusicPlaylists: StateFlow<List<CustomPlaylistEntity>> = repository.getCustomPlaylistsFlow(isVideo = false)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val customVideoPlaylists: StateFlow<List<CustomPlaylistEntity>> = repository.getCustomPlaylistsFlow(isVideo = true)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val playlistItemCounts: StateFlow<Map<Long, Int>> = repository.getPlaylistItemCountsFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val customMusicPlaylistTracks: StateFlow<List<MediaItemEntity>> = _selectedCustomMusicPlaylist
+        .flatMapLatest { playlist ->
+            if (playlist != null) repository.getPlaylistMediaItemsFlow(playlist.id)
+            else flowOf(emptyList())
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val customVideoPlaylistTracks: StateFlow<List<MediaItemEntity>> = _selectedCustomVideoPlaylist
+        .flatMapLatest { playlist ->
+            if (playlist != null) repository.getPlaylistMediaItemsFlow(playlist.id)
+            else flowOf(emptyList())
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _selectedVideoVolume = MutableStateFlow<String?>(null)
     val selectedVideoVolume: StateFlow<String?> = _selectedVideoVolume.asStateFlow()
@@ -233,6 +350,113 @@ class MediaViewModel(
 
     private val _isNowPlayingFullscreen = MutableStateFlow(false)
     val isNowPlayingFullscreen: StateFlow<Boolean> = _isNowPlayingFullscreen.asStateFlow()
+
+    private val _showVisualizerBars = MutableStateFlow(false)
+    val showVisualizerBars: StateFlow<Boolean> = _showVisualizerBars.asStateFlow()
+
+    fun setShowVisualizerBars(show: Boolean) {
+        _showVisualizerBars.value = show
+    }
+
+    // --- Dashboard Widgets States ---
+    private val widgetPrefs = application.getSharedPreferences("dashboard_widgets_prefs", Context.MODE_PRIVATE)
+
+    private val _showClock = MutableStateFlow(widgetPrefs.getBoolean("show_clock", true))
+    val showClock: StateFlow<Boolean> = _showClock.asStateFlow()
+
+    private val _showDate = MutableStateFlow(widgetPrefs.getBoolean("show_date", true))
+    val showDate: StateFlow<Boolean> = _showDate.asStateFlow()
+
+    private val _showTemp = MutableStateFlow(widgetPrefs.getBoolean("show_temp", true))
+    val showTemp: StateFlow<Boolean> = _showTemp.asStateFlow()
+
+    private val _showSpeed = MutableStateFlow(widgetPrefs.getBoolean("show_speed", true))
+    val showSpeed: StateFlow<Boolean> = _showSpeed.asStateFlow()
+
+    // Real Car Telemetry Manager
+    private val telemetryManager = CarTelemetryManager(application)
+    val carSpeed: StateFlow<Int> = telemetryManager.carSpeed
+    val ambientTemp: StateFlow<Int> = telemetryManager.ambientTemp.map { it.toInt() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 25)
+
+    fun setShowClock(show: Boolean) {
+        _showClock.value = show
+        widgetPrefs.edit().putBoolean("show_clock", show).apply()
+    }
+
+    fun setShowDate(show: Boolean) {
+        _showDate.value = show
+        widgetPrefs.edit().putBoolean("show_date", show).apply()
+    }
+
+    fun setShowTemp(show: Boolean) {
+        _showTemp.value = show
+        widgetPrefs.edit().putBoolean("show_temp", show).apply()
+    }
+
+    fun setShowSpeed(show: Boolean) {
+        _showSpeed.value = show
+        widgetPrefs.edit().putBoolean("show_speed", show).apply()
+    }
+
+    // Multi-Selection State
+    private val _selectedItems = MutableStateFlow<Set<String>>(emptySet())
+    val selectedItems: StateFlow<Set<String>> = _selectedItems.asStateFlow()
+
+    private val _isSelectionMode = MutableStateFlow(false)
+    val isSelectionMode: StateFlow<Boolean> = _isSelectionMode.asStateFlow()
+
+    fun toggleItemSelection(filePath: String) {
+        val current = _selectedItems.value.toMutableSet()
+        if (current.contains(filePath)) {
+            current.remove(filePath)
+        } else {
+            current.add(filePath)
+        }
+        _selectedItems.value = current
+        _isSelectionMode.value = current.isNotEmpty()
+    }
+
+    fun clearSelection() {
+        _selectedItems.value = emptySet()
+        _isSelectionMode.value = false
+    }
+
+    fun deleteSelectedItems() {
+        val paths = _selectedItems.value
+        viewModelScope.launch(Dispatchers.IO) {
+            paths.forEach { path ->
+                repository.deleteMediaItemPermanently(path)
+            }
+            withContext(Dispatchers.Main) {
+                clearSelection()
+            }
+        }
+    }
+
+    fun addSelectedToPlaylist(playlistId: Long) {
+        val paths = _selectedItems.value
+        viewModelScope.launch(Dispatchers.IO) {
+            paths.forEach { path ->
+                repository.addItemToPlaylist(playlistId, path)
+            }
+            withContext(Dispatchers.Main) {
+                clearSelection()
+            }
+        }
+    }
+
+    fun removeSelectedFromPlaylist(playlistId: Long) {
+        val paths = _selectedItems.value
+        viewModelScope.launch(Dispatchers.IO) {
+            paths.forEach { path ->
+                repository.removeItemFromPlaylist(playlistId, path)
+            }
+            withContext(Dispatchers.Main) {
+                clearSelection()
+            }
+        }
+    }
 
     // Playback loop and shuffle
     private val _repeatMode = MutableStateFlow(Player.REPEAT_MODE_OFF)
@@ -557,6 +781,14 @@ class MediaViewModel(
     }
 
     init {
+        telemetryManager.startTracking()
+        // Collect SWC config changes and update keyTracker
+        viewModelScope.launch {
+            swcConfig.collect { config ->
+                swcKeyTracker.updateConfig(config)
+            }
+        }
+
         // Track ExoPlayer reference when PlaybackService instantiates it
         viewModelScope.launch {
             PlaybackService.activePlayer.collect { player ->
@@ -601,8 +833,10 @@ class MediaViewModel(
         // Restore playback state across app/car restarts once media is loaded
         viewModelScope.launch {
             combine(musicList, videoList) { music, videos -> music + videos }
+                .filter { it.isNotEmpty() }
+                .take(1)
                 .collect { allMedia ->
-                    if (allMedia.isNotEmpty() && !hasAttemptedRestore && _currentPlayingItem.value == null) {
+                    if (!hasAttemptedRestore && _currentPlayingItem.value == null) {
                         restorePlaybackStateIfAvailable(allMedia)
                     }
                 }
@@ -699,7 +933,8 @@ class MediaViewModel(
                 val p = activePlayer
                 val cur = p?.currentPosition ?: _playbackProgress.value
                 val dur = _playbackDuration.value
-                val step = 3000L
+                val accel = swcConfig.value.customLongPressAcceleration.coerceAtLeast(1)
+                val step = 10000L * accel
                 val nextPos = if (dur > 0) (cur + step).coerceAtMost(dur) else (cur + step)
                 seekTo(nextPos)
                 delay(200L)
@@ -724,7 +959,8 @@ class MediaViewModel(
             while (isActive) {
                 val p = activePlayer
                 val cur = p?.currentPosition ?: _playbackProgress.value
-                val step = 3000L
+                val accel = swcConfig.value.customLongPressAcceleration.coerceAtLeast(1)
+                val step = 10000L * accel
                 val nextPos = (cur - step).coerceAtLeast(0L)
                 seekTo(nextPos)
                 delay(200L)
@@ -770,6 +1006,11 @@ class MediaViewModel(
         _selectedAlbum.value = null
         _selectedFolder.value = null
         _selectedMusicVolume.value = null
+        _selectedCustomMusicPlaylist.value = null
+    }
+
+    fun selectCustomMusicPlaylist(playlist: CustomPlaylistEntity?) {
+        _selectedCustomMusicPlaylist.value = playlist
     }
 
     fun selectMusicVolume(volumeId: String?) {
@@ -798,6 +1039,14 @@ class MediaViewModel(
         _selectedVideoFolder.value = null
         _selectedVideoPlaylist.value = null
         _selectedVideoVolume.value = null
+        _selectedCustomVideoPlaylist.value = null
+    }
+
+    fun selectCustomVideoPlaylist(playlist: CustomPlaylistEntity?) {
+        _selectedCustomVideoPlaylist.value = playlist
+        if (playlist != null) {
+            _selectedVideoPlaylist.value = null
+        }
     }
 
     fun selectVideoFolder(folder: String?) {
@@ -806,6 +1055,9 @@ class MediaViewModel(
 
     fun selectVideoPlaylist(playlist: VideoPlaylistType?) {
         _selectedVideoPlaylist.value = playlist
+        if (playlist != null) {
+            _selectedCustomVideoPlaylist.value = null
+        }
     }
 
     fun selectVideoVolume(volumeId: String?) {
@@ -814,6 +1066,67 @@ class MediaViewModel(
 
     fun setVideoSearchQuery(query: String) {
         _videoSearchQuery.value = query
+    }
+
+    // Playlist CRUD & Media Item Management
+    fun createPlaylist(
+        name: String, 
+        isVideo: Boolean, 
+        initialFilePath: String? = null, 
+        initialFilePaths: List<String>? = null,
+        onCreated: ((Long) -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            if (name.isNotBlank()) {
+                val id = repository.createCustomPlaylist(name.trim(), isVideo)
+                if (initialFilePath != null) {
+                    repository.addItemToPlaylist(id, initialFilePath)
+                }
+                initialFilePaths?.forEach { path ->
+                    repository.addItemToPlaylist(id, path)
+                }
+                onCreated?.invoke(id)
+            }
+        }
+    }
+
+    fun deletePlaylist(playlistId: Long) {
+        viewModelScope.launch {
+            repository.deleteCustomPlaylist(playlistId)
+            if (_selectedCustomMusicPlaylist.value?.id == playlistId) {
+                _selectedCustomMusicPlaylist.value = null
+            }
+            if (_selectedCustomVideoPlaylist.value?.id == playlistId) {
+                _selectedCustomVideoPlaylist.value = null
+            }
+        }
+    }
+
+    fun addItemToPlaylist(playlistId: Long, filePath: String) {
+        viewModelScope.launch {
+            repository.addItemToPlaylist(playlistId, filePath)
+        }
+    }
+
+    fun removeItemFromPlaylist(playlistId: Long, filePath: String) {
+        viewModelScope.launch {
+            repository.removeItemFromPlaylist(playlistId, filePath)
+        }
+    }
+
+    fun deleteMediaItem(item: MediaItemEntity) {
+        viewModelScope.launch {
+            if (_currentPlayingItem.value?.filePath == item.filePath) {
+                if (currentPlaylist.size > 1) {
+                    playNext()
+                } else {
+                    activePlayer?.stop()
+                    _currentPlayingItem.value = null
+                    _isPlaying.value = false
+                }
+            }
+            repository.deleteMediaItemPermanently(item.filePath)
+        }
     }
 
     fun toggleVideoFavorite(filePath: String) {
@@ -1024,6 +1337,7 @@ class MediaViewModel(
     }
 
     override fun onCleared() {
+        telemetryManager.stopTracking()
         savePlaybackState()
         stopFastForward()
         stopRewind()

@@ -2,7 +2,9 @@ package com.example.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -17,19 +19,24 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import android.view.KeyEvent
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.LayoutDirection
 import com.example.data.VolumeEntity
 import com.example.localization.AppLanguage
 import com.example.localization.LocalAppStrings
 import com.example.theme.LocalCarColors
 import com.example.theme.ThemeMode
+import com.example.swc.*
 
 // ==========================================
 // TAB: USB, THEMES, SENSORS & LANGUAGE SETTINGS
@@ -56,108 +63,127 @@ fun UsbAndSettingsTabContent(
     isFullscreenMode: Boolean = true,
     onFullscreenModeToggle: (Boolean) -> Unit = {},
     isAutoLaunchOnUsb: Boolean = true,
-    onAutoLaunchOnUsbToggle: (Boolean) -> Unit = {}
+    onAutoLaunchOnUsbToggle: (Boolean) -> Unit = {},
+    swcConfig: SwcConfig = SwcConfig(),
+    onSwcPresetSelected: (SwcPresetProfile) -> Unit = {},
+    onSwcDualPressModeSelected: (SwcDualPressMode) -> Unit = {},
+    onSwcDualPressWindowChanged: (Long) -> Unit = {},
+    onSwcDedicatedPauseToggled: (Boolean) -> Unit = {},
+    onSwcLongPressModeSelected: (SwcLongPressMode) -> Unit = {},
+    onSwcLongPressThresholdChanged: (Long) -> Unit = {},
+    onSwcSeekStepChanged: (Int) -> Unit = {},
+    onSwcAcceptExtendedKeysToggled: (Boolean) -> Unit = {},
+    onSwcDebounceChanged: (Long) -> Unit = {},
+    swcLiveKeyLog: SwcLiveKeyLog? = null,
+    screenScale: Float = 1.0f,
+    onScreenScaleChanged: (Float) -> Unit = {},
+    fontSizeScale: Float = 1.0f,
+    onFontSizeScaleChanged: (Float) -> Unit = {},
+    onSwcCustomButton1Changed: (Int) -> Unit = {},
+    onSwcCustomButton2Changed: (Int) -> Unit = {},
+    onSwcCustomPlayPauseChanged: (Int) -> Unit = {},
+    onSwcCustomAccelerationChanged: (Int) -> Unit = {},
+    showClock: Boolean = true,
+    onShowClockToggle: (Boolean) -> Unit = {},
+    showDate: Boolean = true,
+    onShowDateToggle: (Boolean) -> Unit = {},
+    showTemp: Boolean = true,
+    onShowTempToggle: (Boolean) -> Unit = {},
+    showSpeed: Boolean = true,
+    onShowSpeedToggle: (Boolean) -> Unit = {},
+    onSwcWheelModeChanged: (CanBusWheelMode) -> Unit = {},
+    onSwcProtocolChanged: (CanBusProtocol) -> Unit = {},
+    ambientTemp: Int = 25,
+    carSpeed: Int = 0
 ) {
     val strings = LocalAppStrings.current
     val colors = LocalCarColors.current
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val isNarrow = isCompactScreenMode || maxWidth < 880.dp
-        var selectedSubTab by remember { mutableIntStateOf(0) } // 0: USB Storage, 1: Settings
+        val isNarrow = isCompactScreenMode || maxWidth < 1200.dp
+        var selectedSubTab by remember { mutableIntStateOf(0) } // 0: USB, 1: SWC, 2: CAN-Bus, 3: App Settings
 
         if (isNarrow) {
+            val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+            var totalDragX by remember { mutableFloatStateOf(0f) }
+
+            val subTabSwipeModifier = Modifier.pointerInput(selectedSubTab, isRtl) {
+                detectHorizontalDragGestures(
+                    onDragStart = { totalDragX = 0f },
+                    onHorizontalDrag = { _, dragAmount ->
+                        totalDragX += dragAmount
+                    },
+                    onDragEnd = {
+                        val swipeThreshold = 50.dp.toPx()
+                        val isNext = if (isRtl) totalDragX > swipeThreshold else totalDragX < -swipeThreshold
+                        val isPrev = if (isRtl) totalDragX < -swipeThreshold else totalDragX > swipeThreshold
+
+                        if (isNext && selectedSubTab < 3) {
+                            selectedSubTab += 1
+                        } else if (isPrev && selectedSubTab > 0) {
+                            selectedSubTab -= 1
+                        }
+                    }
+                )
+            }
+
             Column(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Top Segmented Switcher for Small / Narrow Screens
+                // Top Segmented Switcher for Small / Narrow Screens (4 Tabs)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(colors.surface, RoundedCornerShape(12.dp))
                         .border(1.dp, colors.cardBorder, RoundedCornerShape(12.dp))
                         .padding(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     val mountedCount = volumesList.count { it.isMounted }
 
                     // Tab 0: USB Storage
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (selectedSubTab == 0) colors.surfaceSecondary else Color.Transparent)
-                            .border(
-                                width = if (selectedSubTab == 0) 1.5.dp else 0.dp,
-                                color = if (selectedSubTab == 0) colors.accent else Color.Transparent,
-                                shape = RoundedCornerShape(8.dp)
-                            )
-                            .clickable { selectedSubTab = 0 }
-                            .padding(vertical = 8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Usb,
-                                contentDescription = null,
-                                tint = if (selectedSubTab == 0) colors.accent else colors.textSecondary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Text(
-                                text = "${strings.storageTitle} ($mountedCount)",
-                                color = if (selectedSubTab == 0) colors.textPrimary else colors.textSecondary,
-                                fontSize = 12.sp,
-                                fontWeight = if (selectedSubTab == 0) FontWeight.Bold else FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
+                    SubTabButton(
+                        icon = Icons.Filled.Usb,
+                        label = "${strings.storageTitle} ($mountedCount)",
+                        isSelected = selectedSubTab == 0,
+                        onClick = { selectedSubTab = 0 }
+                    )
 
-                    // Tab 1: Settings & Display
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (selectedSubTab == 1) colors.surfaceSecondary else Color.Transparent)
-                            .border(
-                                width = if (selectedSubTab == 1) 1.5.dp else 0.dp,
-                                color = if (selectedSubTab == 1) colors.accent else Color.Transparent,
-                                shape = RoundedCornerShape(8.dp)
-                            )
-                            .clickable { selectedSubTab = 1 }
-                            .padding(vertical = 8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Settings,
-                                contentDescription = null,
-                                tint = if (selectedSubTab == 1) colors.accent else colors.textSecondary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Text(
-                                text = strings.tabSettings,
-                                color = if (selectedSubTab == 1) colors.textPrimary else colors.textSecondary,
-                                fontSize = 12.sp,
-                                fontWeight = if (selectedSubTab == 1) FontWeight.Bold else FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
+                    // Tab 1: SWC Settings
+                    SubTabButton(
+                        icon = Icons.Filled.DirectionsCar,
+                        label = strings.swcSettingsSectionTitle,
+                        isSelected = selectedSubTab == 1,
+                        onClick = { selectedSubTab = 1 }
+                    )
+
+                    // Tab 2: CAN-Bus Integration
+                    SubTabButton(
+                        icon = Icons.Filled.Cable,
+                        label = "CAN-Bus",
+                        isSelected = selectedSubTab == 2,
+                        onClick = { selectedSubTab = 2 }
+                    )
+
+                    // Tab 3: App Settings
+                    SubTabButton(
+                        icon = Icons.Filled.Settings,
+                        label = strings.tabSettings,
+                        isSelected = selectedSubTab == 3,
+                        onClick = { selectedSubTab = 3 }
+                    )
                 }
 
-                // Active SubTab Content taking full width
-                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    if (selectedSubTab == 0) {
-                        UsbStoragePane(
+                // Active SubTab Content
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .then(subTabSwipeModifier)
+                ) {
+                    when (selectedSubTab) {
+                        0 -> UsbStoragePane(
                             volumesList = volumesList,
                             isScanning = isScanning,
                             scanProgress = scanProgress,
@@ -165,8 +191,35 @@ fun UsbAndSettingsTabContent(
                             isCompactScreenMode = true,
                             modifier = Modifier.fillMaxSize()
                         )
-                    } else {
-                        SettingsPane(
+                        1 -> SwcSettingsPane(
+                            swcConfig = swcConfig,
+                            onPresetSelected = onSwcPresetSelected,
+                            onDualPressModeSelected = onSwcDualPressModeSelected,
+                            onDualPressWindowChanged = onSwcDualPressWindowChanged,
+                            onDedicatedPauseToggled = onSwcDedicatedPauseToggled,
+                            onLongPressModeSelected = onSwcLongPressModeSelected,
+                            onLongPressThresholdChanged = onSwcLongPressThresholdChanged,
+                            onSeekStepChanged = onSwcSeekStepChanged,
+                            onAcceptExtendedKeysToggled = onSwcAcceptExtendedKeysToggled,
+                            onDebounceChanged = onSwcDebounceChanged,
+                            onCustomButton1Changed = onSwcCustomButton1Changed,
+                            onCustomButton2Changed = onSwcCustomButton2Changed,
+                            onCustomPlayPauseChanged = onSwcCustomPlayPauseChanged,
+                            onCustomAccelerationChanged = onSwcCustomAccelerationChanged,
+                            liveKeyLog = swcLiveKeyLog,
+                            isCompactScreenMode = true,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        2 -> CanBusSettingsPane(
+                            swcConfig = swcConfig,
+                            onWheelModeChanged = onSwcWheelModeChanged,
+                            onProtocolChanged = onSwcProtocolChanged,
+                            ambientTemp = ambientTemp,
+                            carSpeed = carSpeed,
+                            isCompactScreenMode = true,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        else -> SettingsPane(
                             currentLanguage = currentLanguage,
                             onLanguageSelected = onLanguageSelected,
                             onResetLanguage = onResetLanguage,
@@ -184,13 +237,25 @@ fun UsbAndSettingsTabContent(
                             onFullscreenModeToggle = onFullscreenModeToggle,
                             isAutoLaunchOnUsb = isAutoLaunchOnUsb,
                             onAutoLaunchOnUsbToggle = onAutoLaunchOnUsbToggle,
+                            screenScale = screenScale,
+                            onScreenScaleChanged = onScreenScaleChanged,
+                            fontSizeScale = fontSizeScale,
+                            onFontSizeScaleChanged = onFontSizeScaleChanged,
+                            showClock = showClock,
+                            onShowClockToggle = onShowClockToggle,
+                            showDate = showDate,
+                            onShowDateToggle = onShowDateToggle,
+                            showTemp = showTemp,
+                            onShowTempToggle = onShowTempToggle,
+                            showSpeed = showSpeed,
+                            onShowSpeedToggle = onShowSpeedToggle,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
                 }
             }
         } else {
-            // Wide Screen: Dual Pane side-by-side
+            // Wide Screen: Triple Pane side-by-side (USB, SWC, Settings)
             Row(
                 modifier = Modifier.fillMaxSize(),
                 horizontalArrangement = Arrangement.spacedBy(if (isCompactScreenMode) 8.dp else 14.dp)
@@ -202,7 +267,41 @@ fun UsbAndSettingsTabContent(
                     onTriggerScan = onTriggerScan,
                     isCompactScreenMode = isCompactScreenMode,
                     modifier = Modifier
-                        .weight(1.05f)
+                        .weight(1f)
+                        .fillMaxHeight()
+                )
+
+                SwcSettingsPane(
+                    swcConfig = swcConfig,
+                    onPresetSelected = onSwcPresetSelected,
+                    onDualPressModeSelected = onSwcDualPressModeSelected,
+                    onDualPressWindowChanged = onSwcDualPressWindowChanged,
+                    onDedicatedPauseToggled = onSwcDedicatedPauseToggled,
+                    onLongPressModeSelected = onSwcLongPressModeSelected,
+                    onLongPressThresholdChanged = onSwcLongPressThresholdChanged,
+                    onSeekStepChanged = onSwcSeekStepChanged,
+                    onAcceptExtendedKeysToggled = onSwcAcceptExtendedKeysToggled,
+                    onDebounceChanged = onSwcDebounceChanged,
+                    onCustomButton1Changed = onSwcCustomButton1Changed,
+                    onCustomButton2Changed = onSwcCustomButton2Changed,
+                    onCustomPlayPauseChanged = onSwcCustomPlayPauseChanged,
+                    onCustomAccelerationChanged = onSwcCustomAccelerationChanged,
+                    liveKeyLog = swcLiveKeyLog,
+                    isCompactScreenMode = isCompactScreenMode,
+                    modifier = Modifier
+                        .weight(1.1f)
+                        .fillMaxHeight()
+                )
+
+                CanBusSettingsPane(
+                    swcConfig = swcConfig,
+                    onWheelModeChanged = onSwcWheelModeChanged,
+                    onProtocolChanged = onSwcProtocolChanged,
+                    ambientTemp = ambientTemp,
+                    carSpeed = carSpeed,
+                    isCompactScreenMode = isCompactScreenMode,
+                    modifier = Modifier
+                        .weight(1f)
                         .fillMaxHeight()
                 )
 
@@ -224,8 +323,20 @@ fun UsbAndSettingsTabContent(
                     onFullscreenModeToggle = onFullscreenModeToggle,
                     isAutoLaunchOnUsb = isAutoLaunchOnUsb,
                     onAutoLaunchOnUsbToggle = onAutoLaunchOnUsbToggle,
+                    screenScale = screenScale,
+                    onScreenScaleChanged = onScreenScaleChanged,
+                    fontSizeScale = fontSizeScale,
+                    onFontSizeScaleChanged = onFontSizeScaleChanged,
+                    showClock = showClock,
+                    onShowClockToggle = onShowClockToggle,
+                    showDate = showDate,
+                    onShowDateToggle = onShowDateToggle,
+                    showTemp = showTemp,
+                    onShowTempToggle = onShowTempToggle,
+                    showSpeed = showSpeed,
+                    onShowSpeedToggle = onShowSpeedToggle,
                     modifier = Modifier
-                        .weight(1.15f)
+                        .weight(1f)
                         .fillMaxHeight()
                 )
             }
@@ -236,6 +347,50 @@ fun UsbAndSettingsTabContent(
 // ==========================================
 // USB STORAGE PANE (Scrollable & Responsive)
 // ==========================================
+@Composable
+fun RowScope.SubTabButton(
+    icon: ImageVector,
+    label: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val colors = LocalCarColors.current
+    Box(
+        modifier = Modifier
+            .weight(1f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (isSelected) colors.surfaceSecondary else Color.Transparent)
+            .border(
+                width = if (isSelected) 1.5.dp else 0.dp,
+                color = if (isSelected) colors.accent else Color.Transparent,
+                shape = RoundedCornerShape(8.dp)
+            )
+            .clickable { onClick() }
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (isSelected) colors.accent else colors.textSecondary,
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                text = label,
+                color = if (isSelected) colors.textPrimary else colors.textSecondary,
+                fontSize = 11.sp,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
 @Composable
 fun UsbStoragePane(
     volumesList: List<VolumeEntity>,
@@ -441,6 +596,18 @@ fun SettingsPane(
     onFullscreenModeToggle: (Boolean) -> Unit,
     isAutoLaunchOnUsb: Boolean,
     onAutoLaunchOnUsbToggle: (Boolean) -> Unit,
+    screenScale: Float,
+    onScreenScaleChanged: (Float) -> Unit,
+    fontSizeScale: Float,
+    onFontSizeScaleChanged: (Float) -> Unit,
+    showClock: Boolean = true,
+    onShowClockToggle: (Boolean) -> Unit = {},
+    showDate: Boolean = true,
+    onShowDateToggle: (Boolean) -> Unit = {},
+    showTemp: Boolean = true,
+    onShowTempToggle: (Boolean) -> Unit = {},
+    showSpeed: Boolean = true,
+    onShowSpeedToggle: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val strings = LocalAppStrings.current
@@ -666,6 +833,62 @@ fun SettingsPane(
                             uncheckedThumbColor = colors.textSecondary,
                             uncheckedTrackColor = colors.surface
                         )
+                    )
+                }
+
+                // Screen Size / UI Scale Slider
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(colors.surfaceSecondary, RoundedCornerShape(10.dp))
+                        .padding(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Filled.AspectRatio, null, tint = colors.accent, modifier = Modifier.size(18.dp))
+                            Text(strings.screenSizeTitle, color = colors.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Text("${(screenScale * 100).toInt()}%", color = colors.accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(strings.screenSizeSubtitle, color = colors.textSecondary, fontSize = 10.sp)
+                    Slider(
+                        value = screenScale,
+                        onValueChange = onScreenScaleChanged,
+                        valueRange = 0.8f..1.3f,
+                        steps = 10
+                    )
+                }
+
+                // Font Size Scale Slider
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(colors.surfaceSecondary, RoundedCornerShape(10.dp))
+                        .padding(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Filled.FormatSize, null, tint = colors.accent, modifier = Modifier.size(18.dp))
+                            Text(strings.fontSizeTitle, color = colors.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Text("${(fontSizeScale * 100).toInt()}%", color = colors.accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(strings.fontSizeSubtitle, color = colors.textSecondary, fontSize = 10.sp)
+                    Slider(
+                        value = fontSizeScale,
+                        onValueChange = onFontSizeScaleChanged,
+                        valueRange = 0.85f..1.35f,
+                        steps = 10
                     )
                 }
 
@@ -938,6 +1161,53 @@ fun SettingsPane(
 
             HorizontalDivider(color = colors.cardBorder, thickness = 1.dp)
 
+            // 3. DASHBOARD WIDGETS SECTION
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = strings.widgetsSectionTitle,
+                    color = colors.accent,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = strings.widgetsSectionSubtitle,
+                    color = colors.textSecondary,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp
+                )
+
+                SettingsToggleRow(
+                    title = strings.showClock,
+                    icon = Icons.Filled.Schedule,
+                    checked = showClock,
+                    onCheckedChange = onShowClockToggle,
+                    isCompact = isCompactScreenMode
+                )
+                SettingsToggleRow(
+                    title = strings.showDate,
+                    icon = Icons.Filled.CalendarMonth,
+                    checked = showDate,
+                    onCheckedChange = onShowDateToggle,
+                    isCompact = isCompactScreenMode
+                )
+                SettingsToggleRow(
+                    title = strings.showTemp,
+                    icon = Icons.Filled.Thermostat,
+                    checked = showTemp,
+                    onCheckedChange = onShowTempToggle,
+                    isCompact = isCompactScreenMode
+                )
+                SettingsToggleRow(
+                    title = strings.showSpeed,
+                    icon = Icons.Filled.Speed,
+                    checked = showSpeed,
+                    onCheckedChange = onShowSpeedToggle,
+                    isCompact = isCompactScreenMode
+                )
+            }
+
+            HorizontalDivider(color = colors.cardBorder, thickness = 1.dp)
+
             // 3. ABOUT APPLICATION & DEVELOPER SECTION
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
@@ -1113,5 +1383,645 @@ fun ThemeModeButton(
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
             maxLines = 1
         )
+    }
+}
+
+// ==========================================
+// SWC SETTINGS PANE & COMPONENTS
+// ==========================================
+@Composable
+fun SwcSettingsPane(
+    swcConfig: SwcConfig,
+    onPresetSelected: (SwcPresetProfile) -> Unit,
+    onDualPressModeSelected: (SwcDualPressMode) -> Unit,
+    onDualPressWindowChanged: (Long) -> Unit,
+    onDedicatedPauseToggled: (Boolean) -> Unit,
+    onLongPressModeSelected: (SwcLongPressMode) -> Unit,
+    onLongPressThresholdChanged: (Long) -> Unit,
+    onSeekStepChanged: (Int) -> Unit,
+    onAcceptExtendedKeysToggled: (Boolean) -> Unit,
+    onDebounceChanged: (Long) -> Unit,
+    onCustomButton1Changed: (Int) -> Unit = {},
+    onCustomButton2Changed: (Int) -> Unit = {},
+    onCustomPlayPauseChanged: (Int) -> Unit = {},
+    onCustomAccelerationChanged: (Int) -> Unit = {},
+    liveKeyLog: SwcLiveKeyLog?,
+    isCompactScreenMode: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val strings = LocalAppStrings.current
+    val colors = LocalCarColors.current
+
+    var mappingTarget by remember { mutableIntStateOf(-1) } // -1: none, 0: Next, 1: Prev, 2: PlayPause
+
+    // Auto-map when key is detected if in mapping mode
+    LaunchedEffect(liveKeyLog) {
+        if (mappingTarget != -1 && liveKeyLog != null) {
+            when (mappingTarget) {
+                0 -> onCustomButton1Changed(liveKeyLog.keyCode)
+                1 -> onCustomButton2Changed(liveKeyLog.keyCode)
+                2 -> onCustomPlayPauseChanged(liveKeyLog.keyCode)
+            }
+            mappingTarget = -1 // Reset after mapping
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .background(colors.surface, RoundedCornerShape(16.dp))
+            .border(1.dp, colors.cardBorder, RoundedCornerShape(16.dp))
+            .padding(if (isCompactScreenMode) 10.dp else 14.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(if (isCompactScreenMode) 10.dp else 14.dp)
+    ) {
+        // Header
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.DirectionsCar,
+                    contentDescription = null,
+                    tint = colors.accent,
+                    modifier = Modifier.size(22.dp)
+                )
+                Text(
+                    text = strings.swcSettingsSectionTitle,
+                    color = colors.accent,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Text(
+                text = strings.swcSettingsSectionSubtitle,
+                color = colors.textSecondary,
+                fontSize = 11.sp
+            )
+        }
+
+        // 1. Live Key Monitor (لوحة الفحص المباشر لأزرار المقود)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(colors.surfaceSecondary, RoundedCornerShape(12.dp))
+                .border(1.dp, colors.cardBorder, RoundedCornerShape(12.dp))
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(Icons.Filled.Monitor, null, tint = colors.accent, modifier = Modifier.size(16.dp))
+                Text(strings.swcTesterTitle, color = colors.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+            Text(strings.swcTesterSubtitle, color = colors.textSecondary, fontSize = 10.sp)
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(colors.surface, RoundedCornerShape(8.dp))
+                    .padding(8.dp)
+            ) {
+                if (liveKeyLog == null) {
+                    Text(
+                        text = strings.swcTesterWaiting,
+                        color = colors.textSecondary,
+                        fontSize = 11.sp,
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("${strings.swcTesterKeyDetected}:", color = colors.textSecondary, fontSize = 10.sp)
+                            Text("${liveKeyLog.keyName} (${liveKeyLog.keyCode})", color = colors.accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("${strings.swcTesterAction}:", color = colors.textSecondary, fontSize = 10.sp)
+                            Text(liveKeyLog.action, color = colors.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("${strings.swcTesterMappedFunction}:", color = colors.textSecondary, fontSize = 10.sp)
+                            Text(liveKeyLog.mappedFunction, color = colors.accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Vehicle Preset Profiles
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(strings.swcPresetTitle, color = colors.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                PresetButton(
+                    title = strings.swcPresetSmartAuto,
+                    isSelected = swcConfig.presetProfile == SwcPresetProfile.SMART_AUTO,
+                    modifier = Modifier.weight(1f),
+                    onClick = { onPresetSelected(SwcPresetProfile.SMART_AUTO) }
+                )
+                PresetButton(
+                    title = strings.swcPresetDedicatedPause,
+                    isSelected = swcConfig.presetProfile == SwcPresetProfile.DEDICATED_PAUSE_BTN,
+                    modifier = Modifier.weight(1f),
+                    onClick = { onPresetSelected(SwcPresetProfile.DEDICATED_PAUSE_BTN) }
+                )
+                PresetButton(
+                    title = strings.swcPresetPeugeot,
+                    isSelected = swcConfig.presetProfile == SwcPresetProfile.PEUGEOT_PSA,
+                    modifier = Modifier.weight(1.2f),
+                    onClick = { onPresetSelected(SwcPresetProfile.PEUGEOT_PSA) }
+                )
+            }
+            if (swcConfig.presetProfile == SwcPresetProfile.PEUGEOT_PSA) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = colors.surfaceSecondary),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, colors.accent)
+                ) {
+                    Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Icon(Icons.Filled.DirectionsCar, null, tint = colors.accent, modifier = Modifier.size(16.dp))
+                            Text(strings.peugeotModeBadge, color = colors.accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Text(strings.peugeotModeHelp, color = colors.textSecondary, fontSize = 10.sp)
+                    }
+                }
+            }
+        }
+
+        HorizontalDivider(color = colors.cardBorder)
+
+        // 6. Extended Keys & Debounce
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(strings.swcExtendedKeysTitle, color = colors.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text(strings.swcExtendedKeysSubtitle, color = colors.textSecondary, fontSize = 10.sp)
+            }
+            Switch(
+                checked = swcConfig.acceptExtendedKeys,
+                onCheckedChange = { onAcceptExtendedKeysToggled(it) }
+            )
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(strings.swcDebounceTitle, color = colors.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("${swcConfig.debounceMs} ms", color = colors.accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+            Text(strings.swcDebounceSubtitle, color = colors.textSecondary, fontSize = 10.sp)
+            Slider(
+                value = swcConfig.debounceMs.toFloat(),
+                onValueChange = { onDebounceChanged(it.toLong()) },
+                valueRange = 100f..500f,
+                steps = 8
+            )
+        }
+
+        HorizontalDivider(color = colors.cardBorder)
+
+        // Custom SWC Configuration Section (Custom Profile & Dual Button Pause / Acceleration)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(colors.surfaceSecondary, RoundedCornerShape(12.dp))
+                .border(1.dp, colors.cardBorder, RoundedCornerShape(12.dp))
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(Icons.Filled.Tune, null, tint = colors.accent, modifier = Modifier.size(18.dp))
+                Text(strings.swcCustomSectionTitle, color = colors.accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+            Text(strings.swcCustomSectionSubtitle, color = colors.textSecondary, fontSize = 10.sp)
+
+            // Button 1 Code
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(strings.swcCustomBtn1Label, color = colors.textPrimary, fontSize = 11.sp)
+                Text("${swcConfig.customButton1KeyCode}", color = colors.accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Button(
+                    onClick = { onCustomButton1Changed(android.view.KeyEvent.KEYCODE_MEDIA_NEXT) },
+                    colors = ButtonDefaults.buttonColors(containerColor = if (swcConfig.customButton1KeyCode == android.view.KeyEvent.KEYCODE_MEDIA_NEXT) colors.accent else colors.surface),
+                    modifier = Modifier.weight(1f).height(32.dp),
+                    contentPadding = PaddingValues(2.dp)
+                ) { Text("NEXT", fontSize = 10.sp, color = colors.textPrimary) }
+                Button(
+                    onClick = { onCustomButton1Changed(android.view.KeyEvent.KEYCODE_CHANNEL_UP) },
+                    colors = ButtonDefaults.buttonColors(containerColor = if (swcConfig.customButton1KeyCode == android.view.KeyEvent.KEYCODE_CHANNEL_UP) colors.accent else colors.surface),
+                    modifier = Modifier.weight(1f).height(32.dp),
+                    contentPadding = PaddingValues(2.dp)
+                ) { Text("CH_UP", fontSize = 10.sp, color = colors.textPrimary) }
+                Button(
+                    onClick = { onCustomButton1Changed(android.view.KeyEvent.KEYCODE_DPAD_DOWN) },
+                    colors = ButtonDefaults.buttonColors(containerColor = if (swcConfig.customButton1KeyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) colors.accent else colors.surface),
+                    modifier = Modifier.weight(1f).height(32.dp),
+                    contentPadding = PaddingValues(2.dp)
+                ) { Text("DPAD_DN", fontSize = 9.sp, color = colors.textPrimary) }
+                Button(
+                    onClick = { onCustomButton1Changed(android.view.KeyEvent.KEYCODE_DPAD_RIGHT) },
+                    colors = ButtonDefaults.buttonColors(containerColor = if (swcConfig.customButton1KeyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT) colors.accent else colors.surface),
+                    modifier = Modifier.weight(1f).height(32.dp),
+                    contentPadding = PaddingValues(2.dp)
+                ) { Text("RIGHT", fontSize = 9.sp, color = colors.textPrimary) }
+            }
+
+            Spacer(modifier = Modifier.height(2.dp))
+
+            // Button 2 Code
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(strings.swcCustomBtn2Label, color = colors.textPrimary, fontSize = 11.sp)
+                Text("${swcConfig.customButton2KeyCode}", color = colors.accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Button(
+                    onClick = { onCustomButton2Changed(android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS) },
+                    colors = ButtonDefaults.buttonColors(containerColor = if (swcConfig.customButton2KeyCode == android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS) colors.accent else colors.surface),
+                    modifier = Modifier.weight(1f).height(32.dp),
+                    contentPadding = PaddingValues(2.dp)
+                ) { Text("PREV", fontSize = 10.sp, color = colors.textPrimary) }
+                Button(
+                    onClick = { onCustomButton2Changed(android.view.KeyEvent.KEYCODE_CHANNEL_DOWN) },
+                    colors = ButtonDefaults.buttonColors(containerColor = if (swcConfig.customButton2KeyCode == android.view.KeyEvent.KEYCODE_CHANNEL_DOWN) colors.accent else colors.surface),
+                    modifier = Modifier.weight(1f).height(32.dp),
+                    contentPadding = PaddingValues(2.dp)
+                ) { Text("CH_DN", fontSize = 10.sp, color = colors.textPrimary) }
+                Button(
+                    onClick = { onCustomButton2Changed(android.view.KeyEvent.KEYCODE_DPAD_UP) },
+                    colors = ButtonDefaults.buttonColors(containerColor = if (swcConfig.customButton2KeyCode == android.view.KeyEvent.KEYCODE_DPAD_UP) colors.accent else colors.surface),
+                    modifier = Modifier.weight(1f).height(32.dp),
+                    contentPadding = PaddingValues(2.dp)
+                ) { Text("DPAD_UP", fontSize = 9.sp, color = colors.textPrimary) }
+                Button(
+                    onClick = { onCustomButton2Changed(android.view.KeyEvent.KEYCODE_DPAD_LEFT) },
+                    colors = ButtonDefaults.buttonColors(containerColor = if (swcConfig.customButton2KeyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT) colors.accent else colors.surface),
+                    modifier = Modifier.weight(1f).height(32.dp),
+                    contentPadding = PaddingValues(2.dp)
+                ) { Text("LEFT", fontSize = 9.sp, color = colors.textPrimary) }
+            }
+
+            Spacer(modifier = Modifier.height(2.dp))
+
+            // Acceleration
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(strings.swcCustomAccelLabel, color = colors.textPrimary, fontSize = 11.sp)
+                Text("${swcConfig.customLongPressAcceleration}x", color = colors.accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+            Slider(
+                value = swcConfig.customLongPressAcceleration.toFloat(),
+                onValueChange = { onCustomAccelerationChanged(it.toInt()) },
+                valueRange = 1f..4f,
+                steps = 3
+            )
+
+            HorizontalDivider(color = colors.cardBorder, modifier = Modifier.padding(vertical = 4.dp))
+
+            // Advanced Customization / Mapping (كوستوميشن)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(Icons.Filled.SettingsInputComponent, null, tint = colors.accent, modifier = Modifier.size(18.dp))
+                Text(strings.swcCustomizationTabTitle, color = colors.accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+            Text(strings.swcMapFunctionsTitle, color = colors.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            Text(strings.swcMapSelectHint, color = colors.textSecondary, fontSize = 10.sp)
+
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                // Map Next
+                MappingRow(
+                    label = strings.swcMapNextLabel,
+                    currentCode = swcConfig.customButton1KeyCode,
+                    isMapping = mappingTarget == 0,
+                    onMapClick = { mappingTarget = 0 },
+                    strings = strings,
+                    colors = colors
+                )
+                // Map Prev
+                MappingRow(
+                    label = strings.swcMapPrevLabel,
+                    currentCode = swcConfig.customButton2KeyCode,
+                    isMapping = mappingTarget == 1,
+                    onMapClick = { mappingTarget = 1 },
+                    strings = strings,
+                    colors = colors
+                )
+                // Map Play/Pause
+                MappingRow(
+                    label = strings.swcMapPlayPauseLabel,
+                    currentCode = swcConfig.customPlayPauseKeyCode,
+                    isMapping = mappingTarget == 2,
+                    onMapClick = { mappingTarget = 2 },
+                    strings = strings,
+                    colors = colors
+                )
+            }
+
+            Button(
+                onClick = { onPresetSelected(SwcPresetProfile.CUSTOM) },
+                colors = ButtonDefaults.buttonColors(containerColor = colors.accent),
+                modifier = Modifier.fillMaxWidth().height(36.dp),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text(strings.saveCustomProfileBtn, color = colors.onAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+fun MappingRow(
+    label: String,
+    currentCode: Int,
+    isMapping: Boolean,
+    onMapClick: () -> Unit,
+    strings: com.example.localization.AppStrings,
+    colors: com.example.theme.CarColors
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(if (isMapping) colors.accent.copy(alpha = 0.1f) else Color.Transparent, RoundedCornerShape(8.dp))
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, color = colors.textPrimary, fontSize = 11.sp)
+            Text(
+                text = if (isMapping) strings.swcMapWaiting else "Code: $currentCode (${KeyEvent.keyCodeToString(currentCode)})",
+                color = if (isMapping) colors.accent else colors.textSecondary,
+                fontSize = 10.sp,
+                fontWeight = if (isMapping) FontWeight.Bold else FontWeight.Normal
+            )
+        }
+        Button(
+            onClick = onMapClick,
+            colors = ButtonDefaults.buttonColors(containerColor = if (isMapping) colors.accent else colors.surfaceSecondary),
+            shape = RoundedCornerShape(6.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            modifier = Modifier.height(28.dp)
+        ) {
+            Text(if (isMapping) "..." else "MAP", fontSize = 10.sp, color = if (isMapping) colors.onAccent else colors.textPrimary)
+        }
+    }
+}
+
+@Composable
+fun PresetButton(
+    title: String,
+    isSelected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val colors = LocalCarColors.current
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (isSelected) colors.accent.copy(alpha = 0.2f) else colors.surfaceSecondary)
+            .border(
+                width = if (isSelected) 1.5.dp else 1.dp,
+                color = if (isSelected) colors.accent else colors.cardBorder,
+                shape = RoundedCornerShape(8.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = title,
+            color = if (isSelected) colors.accent else colors.textPrimary,
+            fontSize = 10.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+fun DualModeOption(
+    title: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val colors = LocalCarColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (isSelected) colors.surfaceSecondary else Color.Transparent)
+            .border(
+                width = if (isSelected) 1.5.dp else 0.dp,
+                color = if (isSelected) colors.accent else Color.Transparent,
+                shape = RoundedCornerShape(8.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = title,
+            color = if (isSelected) colors.textPrimary else colors.textSecondary,
+            fontSize = 11.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+        )
+        RadioButton(
+            selected = isSelected,
+            onClick = onClick
+        )
+    }
+}
+
+@Composable
+fun SettingsToggleRow(
+    title: String,
+    icon: ImageVector,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    isCompact: Boolean = false
+) {
+    val colors = LocalCarColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colors.surfaceSecondary, RoundedCornerShape(12.dp))
+            .border(1.dp, colors.cardBorder, RoundedCornerShape(12.dp))
+            .padding(if (isCompact) 8.dp else 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.weight(1f)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = colors.accent,
+                modifier = Modifier.size(22.dp)
+            )
+            Text(
+                text = title,
+                color = colors.textPrimary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = colors.onAccent,
+                checkedTrackColor = colors.accent,
+                uncheckedThumbColor = colors.textSecondary,
+                uncheckedTrackColor = colors.surface
+            )
+        )
+    }
+}
+
+@Composable
+fun CanBusSettingsPane(
+    swcConfig: SwcConfig,
+    onWheelModeChanged: (CanBusWheelMode) -> Unit,
+    onProtocolChanged: (CanBusProtocol) -> Unit,
+    ambientTemp: Int,
+    carSpeed: Int,
+    isCompactScreenMode: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val colors = LocalCarColors.current
+    val strings = LocalAppStrings.current
+
+    Column(
+        modifier = modifier
+            .background(colors.surface, RoundedCornerShape(16.dp))
+            .border(1.dp, colors.cardBorder, RoundedCornerShape(16.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(Icons.Filled.DirectionsCar, null, tint = colors.accent, modifier = Modifier.size(24.dp))
+            Text(strings.canBusSection, color = colors.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
+
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // 1. CAR TELEMETRY (SPEED & TEMP)
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    // Speed Card
+                    Card(
+                        modifier = Modifier.weight(1f),
+                        colors = CardDefaults.cardColors(containerColor = colors.surfaceSecondary),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, colors.cardBorder)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(Icons.Filled.Speed, null, tint = colors.accent, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.height(4.dp))
+                            Text(strings.carSpeedLabel, color = colors.textSecondary, fontSize = 10.sp)
+                            Text("$carSpeed km/h", color = colors.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    // Temp Card
+                    Card(
+                        modifier = Modifier.weight(1f),
+                        colors = CardDefaults.cardColors(containerColor = colors.surfaceSecondary),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, colors.cardBorder)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(Icons.Filled.Thermostat, null, tint = colors.accent, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.height(4.dp))
+                            Text(strings.carTempLabel, color = colors.textSecondary, fontSize = 10.sp)
+                            Text("$ambientTemp°C", color = colors.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            // 2. WHEEL MODE SELECTION
+            item {
+                Text(strings.canBusWheelModeLabel, color = colors.textSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CanBusWheelMode.values().forEach { mode ->
+                        PresetButton(
+                            title = when(mode) {
+                                CanBusWheelMode.NORMAL -> strings.canBusWheelModeNormal
+                                CanBusWheelMode.REVERSED -> strings.canBusWheelModeReversed
+                                CanBusWheelMode.SMART_ROTARY -> strings.canBusWheelModeSmart
+                            },
+                            isSelected = swcConfig.canBusWheelMode == mode,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onWheelModeChanged(mode) }
+                        )
+                    }
+                }
+            }
+
+            // 3. CAN-BUS PROTOCOL
+            item {
+                Text(strings.canBusProtocolLabel, color = colors.textSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    CanBusProtocol.values().forEach { protocol ->
+                        DualModeOption(
+                            title = when(protocol) {
+                                CanBusProtocol.GENERIC_KEYBOARD -> strings.canBusProtocolGeneric
+                                CanBusProtocol.HIWORLD -> "HiWorld / SimpleSoft"
+                                CanBusProtocol.RAISE -> "Raise / SimpleSoft"
+                                CanBusProtocol.SIMPLE_SOFT -> "SimpleSoft (XP)"
+                                CanBusProtocol.XP_XINPU -> "XinPu (XP)"
+                            },
+                            isSelected = swcConfig.canBusProtocol == protocol,
+                            onClick = { onProtocolChanged(protocol) }
+                        )
+                    }
+                }
+            }
+        }
     }
 }
