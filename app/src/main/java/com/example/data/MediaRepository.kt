@@ -11,6 +11,7 @@ class MediaRepository(private val database: MediaDatabase) {
     val mountedMusic: Flow<List<MediaItemEntity>> = mediaDao.getMountedMusicFlow()
     val mountedVideos: Flow<List<MediaItemEntity>> = mediaDao.getMountedVideosFlow()
     val allVolumes: Flow<List<VolumeEntity>> = volumeDao.getAllVolumesFlow()
+    suspend fun getAllVolumes(): List<VolumeEntity> = volumeDao.getAllVolumes()
 
     suspend fun getVolumeById(volumeId: String): VolumeEntity? = volumeDao.getVolumeById(volumeId)
 

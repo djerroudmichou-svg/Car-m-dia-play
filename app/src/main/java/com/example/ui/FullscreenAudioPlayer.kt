@@ -40,6 +40,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.media3.common.Player
 import coil.compose.AsyncImage
 import com.example.data.MediaItemEntity
@@ -83,7 +85,10 @@ fun FullscreenAudioPlayer(
     showTemp: Boolean = true,
     showSpeed: Boolean = true,
     carSpeed: Int = 0,
-    ambientTemp: Int = 24
+    ambientTemp: Int = 24,
+    useMetricSpeed: Boolean = true,
+    useMetricTemp: Boolean = true,
+    onOpenSensorScanner: (initialCategory: Int) -> Unit = {}
 ) {
     val strings = LocalAppStrings.current
     val colors = LocalCarColors.current
@@ -208,15 +213,26 @@ fun FullscreenAudioPlayer(
                 }
 
                 if (showTemp) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val displayTemp = if (useMetricTemp) ambientTemp else ((ambientTemp * 9 / 5) + 32)
+                    val unitStr = if (useMetricTemp) strings.tempUnit else strings.tempUnitFahrenheit
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(colors.surfaceSecondary.copy(alpha = 0.6f))
+                            .border(1.dp, colors.cardBorder.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                            .clickable { onOpenSensorScanner(1) }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         Icon(
                             imageVector = Icons.Filled.Thermostat,
-                            contentDescription = null,
-                            tint = colors.textSecondary,
+                            contentDescription = strings.filterTemp,
+                            tint = colors.accent,
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = "$ambientTemp${strings.tempUnit}",
+                            text = "$displayTemp$unitStr",
                             color = colors.textPrimary,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold
@@ -225,21 +241,32 @@ fun FullscreenAudioPlayer(
                 }
 
                 if (showSpeed) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val displaySpeed = if (useMetricSpeed) carSpeed else (carSpeed * 0.621371f).toInt()
+                    val unitStr = if (useMetricSpeed) strings.speedUnit else strings.speedUnitMph
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(colors.surfaceSecondary.copy(alpha = 0.6f))
+                            .border(1.dp, colors.cardBorder.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                            .clickable { onOpenSensorScanner(2) }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         Icon(
                             imageVector = Icons.Filled.Speed,
-                            contentDescription = null,
+                            contentDescription = strings.filterSpeed,
                             tint = colors.accent,
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
-                            text = "$carSpeed",
+                            text = "$displaySpeed",
                             color = colors.accent,
                             fontSize = 18.sp,
                             fontWeight = FontWeight.ExtraBold
                         )
                         Text(
-                            text = strings.speedUnit,
+                            text = unitStr,
                             color = colors.textSecondary,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
@@ -294,8 +321,14 @@ fun FullscreenAudioPlayer(
             // Giant Visual Area: Click to toggle between Cover and Equalizer Bars
             Box(
                 modifier = Modifier
-                    .weight(2.5f) // Increased from 1.8f to make it much larger
-                    .fillMaxWidth(0.95f) // Slightly wider
+                    .weight(3.5f)
+                    .then(
+                        if (showVisualizerBars) {
+                            Modifier.fillMaxWidth(0.98f)
+                        } else {
+                            Modifier.aspectRatio(1f, matchHeightConstraintsFirst = true)
+                        }
+                    )
                     .shadow(32.dp, RoundedCornerShape(24.dp))
                     .clip(RoundedCornerShape(24.dp))
                     .border(2.dp, colors.accent.copy(alpha = 0.5f), RoundedCornerShape(24.dp))
@@ -324,8 +357,13 @@ fun FullscreenAudioPlayer(
                     } else {
                         CoverArtImage(
                             coverArtPath = item.coverArtPath,
+                            filePath = item.filePath,
                             title = item.title,
-                            modifier = Modifier.fillMaxSize().aspectRatio(1f)
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(22.dp)),
+                            contentScale = ContentScale.Fit,
+                            useOriginalSize = true
                         )
                     }
                 }
@@ -357,111 +395,113 @@ fun FullscreenAudioPlayer(
                     )
                 }
 
-                // Large Scrub Slider
+                // Large Scrub Slider & Playback Controls in standard Left-To-Right automotive order
                 val progressFraction = if (playbackDuration > 0) {
                     (playbackProgress.toFloat() / playbackDuration).coerceIn(0f, 1f)
                 } else 0f
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(
-                        text = "\u200E${DateUtils.formatElapsedTime(playbackProgress / 1000)}\u200E",
-                        color = colors.textSecondary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-
-                    Slider(
-                        value = progressFraction,
-                        onValueChange = { frac ->
-                            onSeek((frac * playbackDuration).toLong())
-                        },
-                        modifier = Modifier.weight(1f).height(32.dp),
-                        colors = SliderDefaults.colors(
-                            thumbColor = colors.accent,
-                            activeTrackColor = colors.accent,
-                            inactiveTrackColor = colors.cardBorder
-                        )
-                    )
-
-                    Text(
-                        text = "\u200E${DateUtils.formatElapsedTime(playbackDuration / 1000)}\u200E",
-                        color = colors.textSecondary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-
-                // Massive Touch Controls
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = onToggleShuffle,
-                        modifier = Modifier.size(48.dp)
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Filled.Shuffle,
-                            contentDescription = "Shuffle",
-                            tint = if (isShuffleEnabled) colors.accent else colors.textSecondary,
-                            modifier = Modifier.size(26.dp)
+                        Text(
+                            text = "\u200E${DateUtils.formatElapsedTime(playbackProgress / 1000)}\u200E",
+                            color = colors.textSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+
+                        Slider(
+                            value = progressFraction,
+                            onValueChange = { frac ->
+                                onSeek((frac * playbackDuration).toLong())
+                            },
+                            modifier = Modifier.weight(1f).height(32.dp),
+                            colors = SliderDefaults.colors(
+                                thumbColor = colors.accent,
+                                activeTrackColor = colors.accent,
+                                inactiveTrackColor = colors.cardBorder
+                            )
+                        )
+
+                        Text(
+                            text = "\u200E${DateUtils.formatElapsedTime(playbackDuration / 1000)}\u200E",
+                            color = colors.textSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
 
-                    // Previous / Rewind on Hold
-                    CarSeekButton(
-                        icon = Icons.Filled.SkipPrevious,
-                        contentDescription = strings.previous,
-                        modifier = Modifier.size(64.dp),
-                        iconSize = 32.dp,
-                        isSeeking = isRewinding,
-                        onClick = onPrevious,
-                        onHoldStart = onRewindStart,
-                        onHoldEnd = onRewindEnd
-                    )
-
-                    // Main Giant Play / Pause Button
-                    IconButton(
-                        onClick = onPlayPauseToggle,
-                        modifier = Modifier
-                            .size(76.dp)
-                            .background(colors.accent, CircleShape)
+                    // Massive Touch Controls
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                            contentDescription = if (isPlaying) strings.pause else strings.play,
-                            tint = colors.onAccent,
-                            modifier = Modifier.size(42.dp)
-                        )
-                    }
+                        IconButton(
+                            onClick = onToggleShuffle,
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Shuffle,
+                                contentDescription = "Shuffle",
+                                tint = if (isShuffleEnabled) colors.accent else colors.textSecondary,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
 
-                    // Next / Fast-Forward on Hold
-                    CarSeekButton(
-                        icon = Icons.Filled.SkipNext,
-                        contentDescription = strings.next,
-                        modifier = Modifier.size(64.dp),
-                        iconSize = 32.dp,
-                        isSeeking = isFastForwarding,
-                        onClick = onNext,
-                        onHoldStart = onFastForwardStart,
-                        onHoldEnd = onFastForwardEnd
-                    )
-
-                    IconButton(
-                        onClick = onToggleRepeat,
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (repeatMode == Player.REPEAT_MODE_ONE) Icons.Filled.RepeatOne else Icons.Filled.Repeat,
-                            contentDescription = "Repeat",
-                            tint = if (repeatMode != Player.REPEAT_MODE_OFF) colors.accent else colors.textSecondary,
-                            modifier = Modifier.size(26.dp)
+                        // Previous / Rewind on Hold
+                        CarSeekButton(
+                            icon = Icons.Filled.SkipPrevious,
+                            contentDescription = strings.previous,
+                            modifier = Modifier.size(64.dp),
+                            iconSize = 32.dp,
+                            isSeeking = isRewinding,
+                            onClick = onPrevious,
+                            onHoldStart = onRewindStart,
+                            onHoldEnd = onRewindEnd
                         )
+
+                        // Main Giant Play / Pause Button
+                        IconButton(
+                            onClick = onPlayPauseToggle,
+                            modifier = Modifier
+                                .size(76.dp)
+                                .background(colors.accent, CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                                contentDescription = if (isPlaying) strings.pause else strings.play,
+                                tint = colors.onAccent,
+                                modifier = Modifier.size(42.dp)
+                            )
+                        }
+
+                        // Next / Fast-Forward on Hold
+                        CarSeekButton(
+                            icon = Icons.Filled.SkipNext,
+                            contentDescription = strings.next,
+                            modifier = Modifier.size(64.dp),
+                            iconSize = 32.dp,
+                            isSeeking = isFastForwarding,
+                            onClick = onNext,
+                            onHoldStart = onFastForwardStart,
+                            onHoldEnd = onFastForwardEnd
+                        )
+
+                        IconButton(
+                            onClick = onToggleRepeat,
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (repeatMode == Player.REPEAT_MODE_ONE) Icons.Filled.RepeatOne else Icons.Filled.Repeat,
+                                contentDescription = "Repeat",
+                                tint = if (repeatMode != Player.REPEAT_MODE_OFF) colors.accent else colors.textSecondary,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
                     }
                 }
             }

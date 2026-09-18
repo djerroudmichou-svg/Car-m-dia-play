@@ -21,11 +21,13 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -55,7 +57,15 @@ class MainActivity : ComponentActivity() {
     private var swcKeyTracker: SwcKeyTracker? = null
 
     private val viewModel: MediaViewModel by viewModels {
-        MediaViewModel.Factory(application, repository, scanner)
+        object : androidx.lifecycle.ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                val db = MediaDatabase.getDatabase(applicationContext)
+                val repo = MediaRepository(db)
+                val sc = UsbMediaScanner(applicationContext, repo)
+                return MediaViewModel(application, repo, sc) as T
+            }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -94,6 +104,9 @@ class MainActivity : ComponentActivity() {
         }
         PlaybackService.onPlayPauseRequested = {
             runOnUiThread { viewModel.togglePlayPause() }
+        }
+        PlaybackService.onToggleFavoriteRequested = {
+            runOnUiThread { viewModel.toggleCurrentTrackFavorite() }
         }
 
         // 4. Register USB mount and change listeners to refresh ViewModel lists & show notifications
@@ -159,6 +172,8 @@ class MainActivity : ComponentActivity() {
                     Surface(modifier = Modifier.fillMaxSize(), color = carColors.background) {
                         // Check and Request Permissions
                         val permissionsToRequest = mutableListOf<String>().apply {
+                            add(Manifest.permission.ACCESS_FINE_LOCATION)
+                            add(Manifest.permission.ACCESS_COARSE_LOCATION)
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                 add(Manifest.permission.POST_NOTIFICATIONS)
                                 add(Manifest.permission.READ_MEDIA_AUDIO)
@@ -172,11 +187,33 @@ class MainActivity : ComponentActivity() {
                         val launcher = rememberLauncherForActivityResult(
                             contract = ActivityResultContracts.RequestMultiplePermissions()
                         ) { permissions ->
+                            val locFine = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
+                            val locCoarse = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+                            if (locFine || locCoarse) {
+                                Log.i(TAG, "Location permission granted, refreshing telemetry")
+                                viewModel.onLocationPermissionGranted()
+                            }
                             val allGranted = permissions.values.all { it }
-                            if (allGranted) {
-                                // Handled by the LaunchedEffect below
-                            } else {
-                                Log.w(TAG, "Not all storage/notification permissions were granted")
+                            if (!allGranted) {
+                                Log.w(TAG, "Some requested permissions were not granted: $permissions")
+                            }
+                        }
+
+                        DisposableEffect(launcher) {
+                            viewModel.requestLocationPermissionAction = {
+                                try {
+                                    launcher.launch(
+                                        arrayOf(
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                    )
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Error requesting location permission", e)
+                                }
+                            }
+                            onDispose {
+                                viewModel.requestLocationPermissionAction = null
                             }
                         }
 
@@ -237,7 +274,11 @@ class MainActivity : ComponentActivity() {
     private fun startPlaybackService() {
         try {
             val intent = Intent(this, PlaybackService::class.java)
-            startService(intent)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ContextCompat.startForegroundService(this, intent)
+            } else {
+                startService(intent)
+            }
             Log.d(TAG, "PlaybackService started successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start PlaybackService", e)
@@ -283,6 +324,26 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        startPlaybackService()
+        PlaybackService.onNextTrackRequested = {
+            runOnUiThread { viewModel.playNext() }
+        }
+        PlaybackService.onPrevTrackRequested = {
+            runOnUiThread { viewModel.playPrevious() }
+        }
+        PlaybackService.onPlayPauseRequested = {
+            runOnUiThread { viewModel.togglePlayPause() }
+        }
+        PlaybackService.onToggleFavoriteRequested = {
+            runOnUiThread { viewModel.toggleCurrentTrackFavorite() }
+        }
+        UsbMediaReceiver.onUsbChangedCallback = {
+            viewModel.triggerScan()
+        }
+    }
+
     override fun onPause() {
         super.onPause()
         viewModel.savePlaybackState()
@@ -293,6 +354,7 @@ class MainActivity : ComponentActivity() {
         PlaybackService.onNextTrackRequested = null
         PlaybackService.onPrevTrackRequested = null
         PlaybackService.onPlayPauseRequested = null
+        PlaybackService.onToggleFavoriteRequested = null
         UsbMediaReceiver.onUsbChangedCallback = null
         UsbMediaReceiver.onUsbEventCallback = null
         super.onDestroy()

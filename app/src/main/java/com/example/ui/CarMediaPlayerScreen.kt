@@ -1,6 +1,8 @@
 package com.example.ui
 
 import android.text.format.DateUtils
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -35,6 +37,8 @@ import com.example.data.MediaItemEntity
 import com.example.localization.LocalAppStrings
 import com.example.service.PlaybackService
 import com.example.theme.LocalCarColors
+import com.example.telemetry.TempSource
+import com.example.telemetry.SpeedSource
 import com.example.viewmodel.MediaViewModel
 import com.example.viewmodel.MusicCategory
 import com.example.viewmodel.VideoCategory
@@ -90,6 +94,40 @@ fun CarMediaPlayerScreen(
     val showSpeed by viewModel.showSpeed.collectAsStateWithLifecycle()
     val ambientTemp by viewModel.ambientTemp.collectAsStateWithLifecycle()
     val carSpeed by viewModel.carSpeed.collectAsStateWithLifecycle()
+    val useMetricSpeed by viewModel.useMetricSpeed.collectAsStateWithLifecycle()
+    val useMetricTemp by viewModel.useMetricTemp.collectAsStateWithLifecycle()
+    val tempOffset by viewModel.tempOffset.collectAsStateWithLifecycle()
+    val isTempSensorAvailable by viewModel.isTempSensorAvailable.collectAsStateWithLifecycle()
+    val isGpsActive by viewModel.isGpsActive.collectAsStateWithLifecycle()
+
+    val tempSource by viewModel.tempSource.collectAsStateWithLifecycle()
+    val speedSource by viewModel.speedSource.collectAsStateWithLifecycle()
+    val manualTempValue by viewModel.manualTempValue.collectAsStateWithLifecycle()
+    val simulatedSpeedValue by viewModel.simulatedSpeedValue.collectAsStateWithLifecycle()
+    val speedMultiplier by viewModel.speedMultiplier.collectAsStateWithLifecycle()
+    val ambientHardwareTemp by viewModel.ambientHardwareTemp.collectAsStateWithLifecycle()
+    val batteryTemp by viewModel.batteryTemp.collectAsStateWithLifecycle()
+    val cpuSysfsTemp by viewModel.cpuSysfsTemp.collectAsStateWithLifecycle()
+    val canBusTemp by viewModel.canBusTemp.collectAsStateWithLifecycle()
+    val gpsSpeed by viewModel.gpsSpeed.collectAsStateWithLifecycle()
+    val networkSpeed by viewModel.networkSpeed.collectAsStateWithLifecycle()
+    val canBusSpeed by viewModel.canBusSpeed.collectAsStateWithLifecycle()
+
+    val scanReport by viewModel.scanReport.collectAsStateWithLifecycle()
+    val liveSensorValues by viewModel.liveSensorValues.collectAsStateWithLifecycle()
+    val customTempSensorName by viewModel.customTempSensorName.collectAsStateWithLifecycle()
+    val customSysfsTempPath by viewModel.customSysfsTempPath.collectAsStateWithLifecycle()
+    val customSpeedSensorName by viewModel.customSpeedSensorName.collectAsStateWithLifecycle()
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val fineGranted = permissions[android.Manifest.permission.ACCESS_FINE_LOCATION] == true
+        val coarseGranted = permissions[android.Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (fineGranted || coarseGranted) {
+            viewModel.onLocationPermissionGranted()
+        }
+    }
 
     val isSelectionMode by viewModel.isSelectionMode.collectAsStateWithLifecycle()
     val selectedIds by viewModel.selectedItems.collectAsStateWithLifecycle()
@@ -106,6 +144,9 @@ fun CarMediaPlayerScreen(
     val playlistItemCounts by viewModel.playlistItemCounts.collectAsStateWithLifecycle()
     val selectedCustomMusicPlaylist by viewModel.selectedCustomMusicPlaylist.collectAsStateWithLifecycle()
     val selectedCustomVideoPlaylist by viewModel.selectedCustomVideoPlaylist.collectAsStateWithLifecycle()
+
+    var showSensorScannerDialog by remember { mutableStateOf(false) }
+    var sensorScannerInitialCategory by remember { mutableIntStateOf(0) }
 
     Box(
         modifier = modifier
@@ -136,6 +177,8 @@ fun CarMediaPlayerScreen(
             val showSpeed by viewModel.showSpeed.collectAsStateWithLifecycle()
             val carSpeed by viewModel.carSpeed.collectAsStateWithLifecycle()
             val ambientTemp by viewModel.ambientTemp.collectAsStateWithLifecycle()
+            val useMetricSpeed by viewModel.useMetricSpeed.collectAsStateWithLifecycle()
+            val useMetricTemp by viewModel.useMetricTemp.collectAsStateWithLifecycle()
 
             FullscreenAudioPlayer(
                 item = currentPlaying!!,
@@ -164,7 +207,15 @@ fun CarMediaPlayerScreen(
                 showTemp = showTemp,
                 showSpeed = showSpeed,
                 carSpeed = carSpeed,
-                ambientTemp = ambientTemp
+                ambientTemp = ambientTemp,
+                useMetricSpeed = useMetricSpeed,
+                useMetricTemp = useMetricTemp,
+                onOpenSensorScanner = { initialCat ->
+                    sensorScannerInitialCategory = initialCat
+                    viewModel.startLiveSensorAudit()
+                    viewModel.performComprehensiveScan()
+                    showSensorScannerDialog = true
+                }
             )
         }
         // 3. STANDARD CAR DASHBOARD INTERFACE
@@ -221,28 +272,101 @@ fun CarMediaPlayerScreen(
                                 )
                             }
 
-                            // Storage Scan / Status Action Button
-                            Box(
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .clip(CircleShape)
-                                    .background(if (isScanning) Color(0xFFE5A93C).copy(alpha = 0.2f) else colors.surfaceSecondary)
-                                    .clickable { viewModel.triggerScan() },
-                                contentAlignment = Alignment.Center
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                if (isScanning) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(16.dp),
-                                        color = Color(0xFFE5A93C),
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = Icons.Filled.Sync,
-                                        contentDescription = strings.storageScanButton,
-                                        tint = colors.textSecondary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
+                                // Temperature Pill (Clickable -> Opens Sensor Scanner Temp tab)
+                                if (showTemp) {
+                                    val displayTemp = if (useMetricTemp) ambientTemp else ((ambientTemp * 9 / 5) + 32)
+                                    val tempUnitStr = if (useMetricTemp) strings.tempUnit else strings.tempUnitFahrenheit
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(colors.surfaceSecondary)
+                                            .border(1.dp, colors.cardBorder.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                                            .clickable {
+                                                sensorScannerInitialCategory = 1
+                                                viewModel.startLiveSensorAudit()
+                                                viewModel.performComprehensiveScan()
+                                                showSensorScannerDialog = true
+                                            }
+                                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Thermostat,
+                                            contentDescription = strings.filterTemp,
+                                            tint = colors.accent,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Text(
+                                            text = "$displayTemp$tempUnitStr",
+                                            color = colors.textPrimary,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+
+                                // Speed Pill (Clickable -> Opens Sensor Scanner Speed tab)
+                                if (showSpeed) {
+                                    val displaySpeed = if (useMetricSpeed) carSpeed else (carSpeed * 0.621371f).toInt()
+                                    val speedUnitStr = if (useMetricSpeed) strings.speedUnit else strings.speedUnitMph
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(colors.surfaceSecondary)
+                                            .border(1.dp, colors.cardBorder.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                                            .clickable {
+                                                sensorScannerInitialCategory = 2
+                                                viewModel.startLiveSensorAudit()
+                                                viewModel.performComprehensiveScan()
+                                                showSensorScannerDialog = true
+                                            }
+                                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Speed,
+                                            contentDescription = strings.filterSpeed,
+                                            tint = colors.accent,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Text(
+                                            text = "$displaySpeed $speedUnitStr",
+                                            color = colors.accent,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+
+                                // Storage Scan / Status Action Button
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isScanning) Color(0xFFE5A93C).copy(alpha = 0.2f) else colors.surfaceSecondary)
+                                        .clickable { viewModel.triggerScan() },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isScanning) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            color = Color(0xFFE5A93C),
+                                            strokeWidth = 2.dp
+                                        )
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Filled.Sync,
+                                            contentDescription = strings.storageScanButton,
+                                            tint = colors.textSecondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -343,7 +467,52 @@ fun CarMediaPlayerScreen(
                                     showTemp = showTemp,
                                     onShowTempToggle = { viewModel.setShowTemp(it) },
                                     showSpeed = showSpeed,
-                                    onShowSpeedToggle = { viewModel.setShowSpeed(it) }
+                                    onShowSpeedToggle = { viewModel.setShowSpeed(it) },
+                                    useMetricSpeed = useMetricSpeed,
+                                    onUseMetricSpeedToggle = { viewModel.setUseMetricSpeed(it) },
+                                    useMetricTemp = useMetricTemp,
+                                    onUseMetricTempToggle = { viewModel.setUseMetricTemp(it) },
+                                    tempOffset = tempOffset,
+                                    onTempOffsetChanged = { viewModel.setTempOffset(it) },
+                                    isTempSensorAvailable = isTempSensorAvailable,
+                                    isGpsActive = isGpsActive,
+                                    tempSource = tempSource,
+                                    onTempSourceSelected = { viewModel.setTempSource(it) },
+                                    speedSource = speedSource,
+                                    onSpeedSourceSelected = { viewModel.setSpeedSource(it) },
+                                    manualTempValue = manualTempValue,
+                                    onManualTempValueChanged = { viewModel.setManualTempValue(it) },
+                                    simulatedSpeedValue = simulatedSpeedValue,
+                                    onSimulatedSpeedValueChanged = { viewModel.setSimulatedSpeedValue(it) },
+                                    speedMultiplier = speedMultiplier,
+                                    onSpeedMultiplierChanged = { viewModel.setSpeedMultiplier(it) },
+                                    ambientHardwareTemp = ambientHardwareTemp,
+                                    batteryTemp = batteryTemp,
+                                    cpuSysfsTemp = cpuSysfsTemp,
+                                    canBusTemp = canBusTemp,
+                                    gpsSpeed = gpsSpeed,
+                                    networkSpeed = networkSpeed,
+                                    canBusSpeed = canBusSpeed,
+                                    scanReport = scanReport,
+                                    liveSensorValues = liveSensorValues,
+                                    customTempSensorName = customTempSensorName,
+                                    customSysfsTempPath = customSysfsTempPath,
+                                    customSpeedSensorName = customSpeedSensorName,
+                                    onSelectCustomTempSensor = { viewModel.selectCustomTempSensor(it) },
+                                    onSelectCustomSysfsThermal = { viewModel.selectCustomSysfsThermal(it) },
+                                    onSelectCustomSpeedSensor = { viewModel.selectCustomSpeedSensor(it) },
+                                    onStartLiveAudit = { viewModel.startLiveSensorAudit() },
+                                    onStopLiveAudit = { viewModel.stopLiveSensorAudit() },
+                                    onRequestLocationPermission = {
+                                        locationPermissionLauncher.launch(
+                                            arrayOf(
+                                                android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                                android.Manifest.permission.ACCESS_COARSE_LOCATION
+                                            )
+                                        )
+                                    },
+                                    onRescanSensors = { viewModel.performComprehensiveScan() },
+                                    onAutoDetect = { viewModel.autoDetectSensors() }
                                 )
                             }
                         }
@@ -581,7 +750,52 @@ fun CarMediaPlayerScreen(
                                     showTemp = showTemp,
                                     onShowTempToggle = { viewModel.setShowTemp(it) },
                                     showSpeed = showSpeed,
-                                    onShowSpeedToggle = { viewModel.setShowSpeed(it) }
+                                    onShowSpeedToggle = { viewModel.setShowSpeed(it) },
+                                    useMetricSpeed = useMetricSpeed,
+                                    onUseMetricSpeedToggle = { viewModel.setUseMetricSpeed(it) },
+                                    useMetricTemp = useMetricTemp,
+                                    onUseMetricTempToggle = { viewModel.setUseMetricTemp(it) },
+                                    tempOffset = tempOffset,
+                                    onTempOffsetChanged = { viewModel.setTempOffset(it) },
+                                    isTempSensorAvailable = isTempSensorAvailable,
+                                    isGpsActive = isGpsActive,
+                                    tempSource = tempSource,
+                                    onTempSourceSelected = { viewModel.setTempSource(it) },
+                                    speedSource = speedSource,
+                                    onSpeedSourceSelected = { viewModel.setSpeedSource(it) },
+                                    manualTempValue = manualTempValue,
+                                    onManualTempValueChanged = { viewModel.setManualTempValue(it) },
+                                    simulatedSpeedValue = simulatedSpeedValue,
+                                    onSimulatedSpeedValueChanged = { viewModel.setSimulatedSpeedValue(it) },
+                                    speedMultiplier = speedMultiplier,
+                                    onSpeedMultiplierChanged = { viewModel.setSpeedMultiplier(it) },
+                                    ambientHardwareTemp = ambientHardwareTemp,
+                                    batteryTemp = batteryTemp,
+                                    cpuSysfsTemp = cpuSysfsTemp,
+                                    canBusTemp = canBusTemp,
+                                    gpsSpeed = gpsSpeed,
+                                    networkSpeed = networkSpeed,
+                                    canBusSpeed = canBusSpeed,
+                                    scanReport = scanReport,
+                                    liveSensorValues = liveSensorValues,
+                                    customTempSensorName = customTempSensorName,
+                                    customSysfsTempPath = customSysfsTempPath,
+                                    customSpeedSensorName = customSpeedSensorName,
+                                    onSelectCustomTempSensor = { viewModel.selectCustomTempSensor(it) },
+                                    onSelectCustomSysfsThermal = { viewModel.selectCustomSysfsThermal(it) },
+                                    onSelectCustomSpeedSensor = { viewModel.selectCustomSpeedSensor(it) },
+                                    onStartLiveAudit = { viewModel.startLiveSensorAudit() },
+                                    onStopLiveAudit = { viewModel.stopLiveSensorAudit() },
+                                    onRequestLocationPermission = {
+                                        locationPermissionLauncher.launch(
+                                            arrayOf(
+                                                android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                                android.Manifest.permission.ACCESS_COARSE_LOCATION
+                                            )
+                                        )
+                                    },
+                                    onRescanSensors = { viewModel.performComprehensiveScan() },
+                                    onAutoDetect = { viewModel.autoDetectSensors() }
                                 )
                             }
                         }
@@ -785,6 +999,42 @@ fun CarMediaPlayerScreen(
                 isCompact = isCompactScreenMode
             )
         }
+
+        // 11. SENSOR SCANNER AND TELEMETRY CONFIGURATION DIALOG
+        if (showSensorScannerDialog) {
+            SensorScannerDialog(
+                scanReport = scanReport,
+                liveSensorValues = liveSensorValues,
+                customTempSensorName = customTempSensorName,
+                customSysfsTempPath = customSysfsTempPath,
+                customSpeedSensorName = customSpeedSensorName,
+                activeTempSource = tempSource,
+                activeSpeedSource = speedSource,
+                initialCategoryIndex = sensorScannerInitialCategory,
+                onSelectCustomTempSensor = { viewModel.selectCustomTempSensor(it) },
+                onSelectCustomSysfsThermal = { viewModel.selectCustomSysfsThermal(it) },
+                onSelectCustomSpeedSensor = { viewModel.selectCustomSpeedSensor(it) },
+                onSelectTempSource = { viewModel.setTempSource(it) },
+                onSelectSpeedSource = { viewModel.setSpeedSource(it) },
+                onAutoDetect = { viewModel.autoDetectSensors() },
+                onRequestLocationPermission = {
+                    locationPermissionLauncher.launch(
+                        arrayOf(
+                            android.Manifest.permission.ACCESS_FINE_LOCATION,
+                            android.Manifest.permission.ACCESS_COARSE_LOCATION
+                        )
+                    )
+                },
+                onRescan = {
+                    viewModel.startLiveSensorAudit()
+                    viewModel.performComprehensiveScan()
+                },
+                onDismiss = {
+                    viewModel.stopLiveSensorAudit()
+                    showSensorScannerDialog = false
+                }
+            )
+        }
     }
 }
 
@@ -895,6 +1145,7 @@ fun MusicTabContent(
 
     val currentCategory by viewModel.musicCategory.collectAsStateWithLifecycle()
     val filteredTracks by viewModel.filteredMusicList.collectAsStateWithLifecycle()
+    val allTracks by viewModel.musicList.collectAsStateWithLifecycle()
     val artistsList by viewModel.artistsList.collectAsStateWithLifecycle()
     val albumsList by viewModel.albumsList.collectAsStateWithLifecycle()
     val foldersList by viewModel.foldersList.collectAsStateWithLifecycle()
@@ -974,6 +1225,7 @@ fun MusicTabContent(
                     onCreatePlaylistClick = onCreatePlaylistClick,
                     onDeleteCustomPlaylist = onDeleteCustomPlaylist,
                     filteredTracks = filteredTracks,
+                    allTracks = allTracks,
                     currentPlaying = currentPlaying,
                     onPlayTrack = { track, list -> viewModel.playMediaItem(track, list) },
                     onTrackLongClick = onTrackLongClick,
@@ -1042,6 +1294,7 @@ fun MusicTabContent(
                     onCreatePlaylistClick = onCreatePlaylistClick,
                     onDeleteCustomPlaylist = onDeleteCustomPlaylist,
                     filteredTracks = filteredTracks,
+                    allTracks = allTracks,
                     currentPlaying = currentPlaying,
                     onPlayTrack = { track, list -> viewModel.playMediaItem(track, list) },
                     onTrackLongClick = onTrackLongClick,

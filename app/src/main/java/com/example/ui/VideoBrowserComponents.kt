@@ -382,7 +382,7 @@ fun VideoPlaylistsListView(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "إنشاء قائمة فيديو مخصصة",
+                        text = strings.createVideoPlaylist,
                         color = colors.textSecondary,
                         fontSize = if (isCompact) 10.sp else 11.sp
                     )
@@ -471,7 +471,7 @@ fun VideoPlaylistsListView(
         // Smart Playlists Section Header
         item(key = "smart_playlists_header") {
             Text(
-                text = "قوائم التشغيل الذكية",
+                text = strings.smartPlaylists,
                 color = colors.accent,
                 fontSize = if (isCompact) 12.sp else 13.sp,
                 fontWeight = FontWeight.Bold,

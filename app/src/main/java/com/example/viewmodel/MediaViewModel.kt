@@ -2,8 +2,11 @@ package com.example.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
@@ -24,8 +27,10 @@ import com.example.localization.AppStrings
 import com.example.localization.LocalizationManager
 import com.example.scanner.UsbEvent
 import com.example.scanner.UsbMediaScanner
+import com.example.service.CarPlayerManager
 import com.example.service.PlaybackService
 import com.example.swc.SwcConfig
+import com.example.data.CoverArtResolver
 import com.example.swc.SwcDualPressMode
 import com.example.swc.SwcKeyTracker
 import com.example.swc.SwcLiveKeyLog
@@ -35,6 +40,12 @@ import com.example.swc.SwcSettingsManager
 import com.example.swc.CanBusWheelMode
 import com.example.swc.CanBusProtocol
 import com.example.telemetry.CarTelemetryManager
+import com.example.telemetry.TempSource
+import com.example.telemetry.SpeedSource
+import com.example.telemetry.ComprehensiveSensorScanReport
+import com.example.telemetry.ScannedSensorInfo
+import com.example.telemetry.ScannedSysfsThermalInfo
+import com.example.telemetry.ScannedLocationProviderInfo
 import com.example.theme.CarThemeManager
 import com.example.theme.DynamicColorExtractor
 import com.example.theme.ThemeMode
@@ -198,11 +209,8 @@ class MediaViewModel(
 
     val swcKeyTracker = SwcKeyTracker(
         config = swcConfig.value,
-        onPlayPauseComboTriggered = {
+        onPlayPauseTriggered = {
             togglePlayPause()
-            val strings = appStrings.value
-            _usbNotification.value = UsbNotification(strings.swcSimultaneousToggleToast, true)
-            scheduleUsbNotificationDismiss()
         },
         onNextTrack = { playNext() },
         onPrevTrack = { playPrevious() },
@@ -258,13 +266,13 @@ class MediaViewModel(
 
     // UI state
     val musicList: StateFlow<List<MediaItemEntity>> = repository.mountedMusic
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val videoList: StateFlow<List<MediaItemEntity>> = repository.mountedVideos
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val volumesList: StateFlow<List<VolumeEntity>> = repository.allVolumes
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val isScanning: StateFlow<Boolean> = scanner.isScanning
     val scanProgress: StateFlow<String> = scanner.scanProgress
@@ -344,6 +352,55 @@ class MediaViewModel(
         return playbackPrefs.getStringSet("favorite_videos_set", emptySet()) ?: emptySet()
     }
 
+    private val _favoriteMusicPaths = MutableStateFlow<Set<String>>(loadFavoriteMusic())
+    val favoriteMusicPaths: StateFlow<Set<String>> = _favoriteMusicPaths.asStateFlow()
+
+    private fun loadFavoriteMusic(): Set<String> {
+        return playbackPrefs.getStringSet("favorite_music_set", emptySet()) ?: emptySet()
+    }
+
+    fun isFavorite(filePath: String): Boolean {
+        return _favoriteMusicPaths.value.contains(filePath) || _favoriteVideoPaths.value.contains(filePath)
+    }
+
+    fun isMusicFavorite(filePath: String): Boolean {
+        return _favoriteMusicPaths.value.contains(filePath)
+    }
+
+    fun toggleCurrentTrackFavorite() {
+        val current = _currentPlayingItem.value ?: return
+        if (current.isVideo) {
+            toggleVideoFavorite(current.filePath)
+        } else {
+            toggleMusicFavorite(current.filePath)
+        }
+    }
+
+    fun toggleMusicFavorite(filePath: String) {
+        val current = _favoriteMusicPaths.value.toMutableSet()
+        if (current.contains(filePath)) {
+            current.remove(filePath)
+        } else {
+            current.add(filePath)
+        }
+        _favoriteMusicPaths.value = current
+        playbackPrefs.edit().putStringSet("favorite_music_set", current).apply()
+        updateNotification()
+    }
+
+    fun updateNotification() {
+        val item = _currentPlayingItem.value ?: return
+        val isFav = isFavorite(item.filePath)
+        PlaybackService.updateNotificationMetadata(
+            title = item.title,
+            artist = item.artist,
+            album = item.album,
+            coverArtPath = item.coverArtPath,
+            isPlaying = _isPlaying.value,
+            isFavorite = isFav
+        )
+    }
+
     // Fullscreen view states
     private val _isVideoFullscreen = MutableStateFlow(false)
     val isVideoFullscreen: StateFlow<Boolean> = _isVideoFullscreen.asStateFlow()
@@ -377,7 +434,67 @@ class MediaViewModel(
     private val telemetryManager = CarTelemetryManager(application)
     val carSpeed: StateFlow<Int> = telemetryManager.carSpeed
     val ambientTemp: StateFlow<Int> = telemetryManager.ambientTemp.map { it.toInt() }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 25)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 24)
+    val rawAmbientTemp: StateFlow<Float> = telemetryManager.rawAmbientTemp
+    val tempOffset: StateFlow<Float> = telemetryManager.tempOffset
+    val useMetricSpeed: StateFlow<Boolean> = telemetryManager.useMetricSpeed
+    val useMetricTemp: StateFlow<Boolean> = telemetryManager.useMetricTemp
+    val isTempSensorAvailable: StateFlow<Boolean> = telemetryManager.isTempSensorAvailable
+    val isGpsActive: StateFlow<Boolean> = telemetryManager.isGpsActive
+
+    // Multi-source Telemetry Flows
+    val tempSource: StateFlow<TempSource> = telemetryManager.tempSource
+    val speedSource: StateFlow<SpeedSource> = telemetryManager.speedSource
+    val manualTempValue: StateFlow<Float> = telemetryManager.manualTempValue
+    val simulatedSpeedValue: StateFlow<Int> = telemetryManager.simulatedSpeedValue
+    val speedMultiplier: StateFlow<Float> = telemetryManager.speedMultiplier
+    val ambientHardwareTemp: StateFlow<Float?> = telemetryManager.ambientHardwareTemp
+    val batteryTemp: StateFlow<Float?> = telemetryManager.batteryTemp
+    val cpuSysfsTemp: StateFlow<Float?> = telemetryManager.cpuSysfsTemp
+    val canBusTemp: StateFlow<Float?> = telemetryManager.canBusTemp
+    val gpsSpeed: StateFlow<Int?> = telemetryManager.gpsSpeed
+    val networkSpeed: StateFlow<Int?> = telemetryManager.networkSpeed
+    val canBusSpeed: StateFlow<Int?> = telemetryManager.canBusSpeed
+
+    // Custom Chosen Sensors & Discovery Flows
+    val customTempSensorName: StateFlow<String?> = telemetryManager.customTempSensorName
+    val customSysfsTempPath: StateFlow<String?> = telemetryManager.customSysfsTempPath
+    val customSpeedSensorName: StateFlow<String?> = telemetryManager.customSpeedSensorName
+    val customHardwareTemp: StateFlow<Float?> = telemetryManager.customHardwareTemp
+    val customSysfsTemp: StateFlow<Float?> = telemetryManager.customSysfsTemp
+    val customSpeed: StateFlow<Int?> = telemetryManager.customSpeed
+    val scanReport: StateFlow<ComprehensiveSensorScanReport> = telemetryManager.scanReport
+    val liveSensorValues: StateFlow<Map<String, List<Float>>> = telemetryManager.liveSensorValues
+
+    var requestLocationPermissionAction: (() -> Unit)? = null
+
+    fun performComprehensiveScan() = telemetryManager.performComprehensiveScan()
+    fun autoDetectSensors(): String = telemetryManager.autoDetectBestSensors()
+    fun selectCustomTempSensor(name: String) = telemetryManager.selectCustomTempSensor(name)
+    fun selectCustomSysfsThermal(path: String) = telemetryManager.selectCustomSysfsThermal(path)
+    fun selectCustomSpeedSensor(name: String) = telemetryManager.selectCustomSpeedSensor(name)
+    fun startLiveSensorAudit() = telemetryManager.startLiveAudit()
+    fun stopLiveSensorAudit() = telemetryManager.stopLiveAudit()
+    fun onLocationPermissionGranted() = telemetryManager.onLocationPermissionGranted()
+
+    fun setTempSource(source: TempSource) = telemetryManager.setTempSource(source)
+    fun setSpeedSource(source: SpeedSource) = telemetryManager.setSpeedSource(source)
+    fun setManualTempValue(tempC: Float) = telemetryManager.setManualTempValue(tempC)
+    fun setSimulatedSpeedValue(speedKmh: Int) = telemetryManager.setSimulatedSpeedValue(speedKmh)
+    fun setSpeedMultiplier(multiplier: Float) = telemetryManager.setSpeedMultiplier(multiplier)
+    fun pollAllSensors() = telemetryManager.pollAllSensorsOnce()
+
+    fun setTempOffset(offset: Float) {
+        telemetryManager.setTempOffset(offset)
+    }
+
+    fun setUseMetricSpeed(isMetric: Boolean) {
+        telemetryManager.setUseMetricSpeed(isMetric)
+    }
+
+    fun setUseMetricTemp(isMetric: Boolean) {
+        telemetryManager.setUseMetricTemp(isMetric)
+    }
 
     fun setShowClock(show: Boolean) {
         _showClock.value = show
@@ -498,7 +615,16 @@ class MediaViewModel(
     val isResumedSession: StateFlow<Boolean> = _isResumedSession.asStateFlow()
     private var hasAttemptedRestore = false
 
-    private var activePlayer: ExoPlayer? = null
+    private var activePlayerField: ExoPlayer? = null
+    val activePlayer: ExoPlayer?
+        get() = activePlayerField ?: PlaybackService.activePlayer.value
+
+    private var activePlayerManagerField: CarPlayerManager? = null
+    var activePlayerManager: CarPlayerManager?
+        get() = activePlayerManagerField ?: PlaybackService.activePlayerManager.value
+        private set(value) {
+            activePlayerManagerField = value
+        }
     private var currentPlaylist = emptyList<MediaItemEntity>()
 
     // Artist groups
@@ -565,7 +691,18 @@ class MediaViewModel(
         } else if (criteria.category == MusicCategory.ALBUMS && criteria.album != null) {
             result = result.filter { (it.album ?: "Unknown Album") == criteria.album }
         } else if (criteria.category == MusicCategory.FOLDERS && criteria.folder != null) {
-            result = result.filter { (File(it.filePath).parent ?: "Root") == criteria.folder }
+            val target = criteria.folder.trim().trimEnd('/')
+            val targetName = File(target).name
+            result = result.filter { item ->
+                val parentPath = (File(item.filePath).parent ?: "Root").trimEnd('/')
+                val parentName = File(item.filePath).parentFile?.name ?: ""
+                parentPath == target ||
+                parentPath.equals(target, ignoreCase = true) ||
+                parentPath.startsWith("$target/") ||
+                item.filePath.startsWith("$target/") ||
+                (targetName.isNotBlank() && parentName.equals(targetName, ignoreCase = true)) ||
+                parentPath.endsWith("/" + target.trimStart('/'))
+            }
         } else if (criteria.category == MusicCategory.DRIVES && criteria.volumeId != null) {
             result = result.filter { it.volumeId == criteria.volumeId }
         }
@@ -709,7 +846,18 @@ class MediaViewModel(
         when (filter.category) {
             VideoCategory.FOLDERS -> {
                 if (filter.folder != null) {
-                    result = result.filter { (File(it.filePath).parent ?: "Root") == filter.folder }
+                    val target = filter.folder.trim().trimEnd('/')
+                    val targetName = File(target).name
+                    result = result.filter { item ->
+                        val parentPath = (File(item.filePath).parent ?: "Root").trimEnd('/')
+                        val parentName = File(item.filePath).parentFile?.name ?: ""
+                        parentPath == target ||
+                        parentPath.equals(target, ignoreCase = true) ||
+                        parentPath.startsWith("$target/") ||
+                        item.filePath.startsWith("$target/") ||
+                        (targetName.isNotBlank() && parentName.equals(targetName, ignoreCase = true)) ||
+                        parentPath.endsWith("/" + target.trimStart('/'))
+                    }
                 }
             }
             VideoCategory.PLAYLISTS -> {
@@ -757,6 +905,7 @@ class MediaViewModel(
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(playing: Boolean) {
             _isPlaying.value = playing
+            updateNotification()
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -765,6 +914,7 @@ class MediaViewModel(
                 ?: musicList.value.find { it.filePath == mediaId }
                 ?: videoList.value.find { it.filePath == mediaId }
             _currentPlayingItem.value = currentItem
+            updateNotification()
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -789,12 +939,19 @@ class MediaViewModel(
             }
         }
 
+        // Track CarPlayerManager reference from PlaybackService
+        viewModelScope.launch {
+            PlaybackService.activePlayerManager.collect { manager ->
+                activePlayerManager = manager
+            }
+        }
+
         // Track ExoPlayer reference when PlaybackService instantiates it
         viewModelScope.launch {
             PlaybackService.activePlayer.collect { player ->
                 try {
-                    activePlayer?.removeListener(playerListener)
-                    activePlayer = player
+                    activePlayerField?.removeListener(playerListener)
+                    activePlayerField = player
                     player?.let { p ->
                         p.addListener(playerListener)
                         _isPlaying.value = p.isPlaying
@@ -803,7 +960,10 @@ class MediaViewModel(
                         // Recover playing metadata if already active
                         p.currentMediaItem?.mediaId?.let { id ->
                             val item = musicList.value.find { it.filePath == id } ?: videoList.value.find { it.filePath == id }
-                            _currentPlayingItem.value = item
+                            if (item != null) {
+                                _currentPlayingItem.value = item
+                                updateNotification()
+                            }
                         }
                     }
                 } catch (e: Exception) {
@@ -830,13 +990,25 @@ class MediaViewModel(
             }
         }
 
-        // Restore playback state across app/car restarts once media is loaded
+        // Synchronize player item & restore playback state across app/car restarts once media is loaded
         viewModelScope.launch {
             combine(musicList, videoList) { music, videos -> music + videos }
                 .filter { it.isNotEmpty() }
-                .take(1)
                 .collect { allMedia ->
-                    if (!hasAttemptedRestore && _currentPlayingItem.value == null) {
+                    val player = activePlayer
+                    val currentMediaId = player?.currentMediaItem?.mediaId
+
+                    if (currentMediaId != null) {
+                        // Player is active in service: link media item entity
+                        val matching = allMedia.find { it.filePath == currentMediaId }
+                        if (matching != null) {
+                            _currentPlayingItem.value = matching
+                            _playbackDuration.value = player.duration.coerceAtLeast(0L)
+                            _playbackProgress.value = player.currentPosition
+                            _isPlaying.value = player.isPlaying
+                            hasAttemptedRestore = true
+                        }
+                    } else if (!hasAttemptedRestore && _currentPlayingItem.value == null) {
                         restorePlaybackStateIfAvailable(allMedia)
                     }
                 }
@@ -845,9 +1017,19 @@ class MediaViewModel(
         // Dynamic Accent Color Extractor from Album Cover Art
         viewModelScope.launch {
             combine(_currentPlayingItem, isDynamicColorEnabled) { item, dynamicEnabled ->
-                if (dynamicEnabled && item != null && !item.coverArtPath.isNullOrEmpty()) {
-                    DynamicColorExtractor.extractVibrantColor(item.coverArtPath)
-                } else {
+                try {
+                    if (dynamicEnabled && item != null) {
+                        val artPath = if (!item.coverArtPath.isNullOrEmpty()) {
+                            item.coverArtPath
+                        } else {
+                            CoverArtResolver.resolveCoverArt(getApplication(), null, item.filePath)
+                        }
+                        DynamicColorExtractor.extractVibrantColor(artPath)
+                    } else {
+                        null
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error extracting dynamic accent color", e)
                     null
                 }
             }.collect { extractedColor ->
@@ -877,11 +1059,23 @@ class MediaViewModel(
      */
     private fun restorePlaybackStateIfAvailable(items: List<MediaItemEntity>) {
         if (hasAttemptedRestore || _currentPlayingItem.value != null) return
+        val player = activePlayer
+        if (player != null && player.currentMediaItem != null) return // Already active in background
+
         val lastPath = playbackPrefs.getString(KEY_LAST_PATH, null) ?: return
         val lastPos = playbackPrefs.getLong(KEY_LAST_POS, 0L)
 
         val target = items.find { it.filePath == lastPath }
         if (target != null) {
+            if (player == null) return // Wait until activePlayer is initialized
+            if (target.filePath.startsWith("/")) {
+                val f = File(target.filePath)
+                if (!f.exists() || !f.canRead()) {
+                    Log.w(TAG, "Saved media file no longer exists or unmounted: ${target.filePath}")
+                    hasAttemptedRestore = true
+                    return
+                }
+            }
             hasAttemptedRestore = true
             _currentPlayingItem.value = target
             _playbackProgress.value = lastPos
@@ -891,32 +1085,30 @@ class MediaViewModel(
             // Set playlist to the item's category
             currentPlaylist = if (target.isVideo) videoList.value else musicList.value
 
-            activePlayer?.let { player ->
-                try {
-                    val mediaUri = if (target.filePath.startsWith("/")) {
-                        Uri.fromFile(File(target.filePath))
-                    } else {
-                        Uri.parse(target.filePath)
-                    }
-                    val metadata = MediaMetadata.Builder()
-                        .setTitle(target.title)
-                        .setArtist(target.artist)
-                        .setAlbumTitle(target.album)
-                        .build()
-                    val mediaItem = MediaItem.Builder()
-                        .setUri(mediaUri)
-                        .setMediaId(target.filePath)
-                        .setMimeType(target.mimeType)
-                        .setMediaMetadata(metadata)
-                        .build()
-
-                    player.setMediaItem(mediaItem, lastPos)
-                    player.prepare()
-                    player.playWhenReady = false
-                    Log.i(TAG, "Auto-resumed playback session for ${target.title} at ${lastPos}ms")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error restoring saved player session", e)
+            try {
+                val mediaUri = if (target.filePath.startsWith("/")) {
+                    Uri.fromFile(File(target.filePath))
+                } else {
+                    Uri.parse(target.filePath)
                 }
+                val metadata = MediaMetadata.Builder()
+                    .setTitle(target.title)
+                    .setArtist(target.artist ?: "")
+                    .setAlbumTitle(target.album ?: "")
+                    .build()
+                val mediaItem = MediaItem.Builder()
+                    .setUri(mediaUri)
+                    .setMediaId(target.filePath)
+                    .setMimeType(target.mimeType)
+                    .setMediaMetadata(metadata)
+                    .build()
+
+                player.setMediaItem(mediaItem, lastPos)
+                player.prepare()
+                player.playWhenReady = false
+                Log.i(TAG, "Auto-resumed playback session for ${target.title} at ${lastPos}ms")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error restoring saved player session", e)
             }
         }
     }
@@ -987,6 +1179,45 @@ class MediaViewModel(
         usbDismissJob = viewModelScope.launch {
             delay(4000L)
             _usbNotification.value = null
+        }
+
+        if (!event.isConnected) {
+            // Check if current media item is on disconnected USB
+            val current = _currentPlayingItem.value
+            if (current != null && current.filePath.startsWith("/")) {
+                val f = File(current.filePath)
+                if (!f.exists()) {
+                    Log.i(TAG, "Currently playing item disconnected with USB. Saving position and pausing.")
+                    savePlaybackState()
+                    try {
+                        activePlayer?.pause()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error pausing on USB removal", e)
+                    }
+                }
+            }
+        } else {
+            // USB reconnected: trigger light non-destructive scan to bring cached tracks online immediately
+            triggerScan()
+            // Auto-recover current track DataSource if file is accessible and player was stalled/errored
+            viewModelScope.launch {
+                delay(800L) // Wait brief moment for OS mount
+                val current = _currentPlayingItem.value
+                if (current != null && current.filePath.startsWith("/")) {
+                    val f = File(current.filePath)
+                    if (f.exists()) {
+                        Log.i(TAG, "USB reconnected: File accessible at ${f.path}. Recovering player state.")
+                        val p = activePlayer
+                        if (p?.playerError != null || p?.playbackState == Player.STATE_IDLE) {
+                            val savedPos = _playbackProgress.value
+                            playMediaItem(current)
+                            if (savedPos > 0L) {
+                                activePlayer?.seekTo(savedPos)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1174,52 +1405,133 @@ class MediaViewModel(
         }
     }
 
+    private fun startPlaybackService() {
+        try {
+            val app = getApplication<Application>()
+            val intent = Intent(app, PlaybackService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ContextCompat.startForegroundService(app, intent)
+            } else {
+                app.startService(intent)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start PlaybackService from MediaViewModel", e)
+        }
+    }
+
     fun playMediaItem(item: MediaItemEntity, playlist: List<MediaItemEntity>? = null) {
-        val player = activePlayer ?: return
+        val player = activePlayer
+        if (player == null) {
+            Log.w(TAG, "activePlayer is null when playMediaItem called. Starting PlaybackService...")
+            startPlaybackService()
+            viewModelScope.launch {
+                delay(300L)
+                val retryPlayer = activePlayer
+                if (retryPlayer != null) {
+                    playMediaItem(item, playlist)
+                }
+            }
+            return
+        }
         currentPlaylist = playlist ?: if (item.isVideo) filteredVideoList.value.ifEmpty { videoList.value } else filteredMusicList.value.ifEmpty { musicList.value }
         _currentPlayingItem.value = item
 
         try {
-            // Set up Media3 metadata
-            val metadata = MediaMetadata.Builder()
-                .setTitle(item.title)
-                .setArtist(item.artist ?: "فنان غير معروف")
-                .setAlbumTitle(item.album ?: "ألبوم غير معروف")
-                .build()
-
-            val mediaUri = if (item.filePath.startsWith("/")) {
-                Uri.fromFile(File(item.filePath))
+            val mediaUri = if (item.filePath.startsWith("http://") || item.filePath.startsWith("https://") || item.filePath.startsWith("content://")) {
+                Uri.parse(item.filePath)
+            } else if (item.filePath.startsWith("/")) {
+                val f = File(item.filePath)
+                if (!f.exists()) {
+                    Log.w(TAG, "Local file not found on disk: ${item.filePath}")
+                    val msg = appStrings.value.usbDisconnectedToast.replace("%s", "USB")
+                    _usbNotification.value = UsbNotification("File not found / USB unmounted", false)
+                    return
+                }
+                Uri.fromFile(f)
             } else {
                 Uri.parse(item.filePath)
             }
 
-            val mediaItem = MediaItem.Builder()
-                .setUri(mediaUri)
-                .setMediaId(item.filePath)
-                .setMimeType(item.mimeType)
-                .setMediaMetadata(metadata)
-                .build()
+            val artworkUri = item.coverArtPath?.let { path ->
+                if (path.startsWith("/")) Uri.fromFile(File(path)) else Uri.parse(path)
+            }
 
-            player.stop()
-            player.setMediaItem(mediaItem)
-            player.prepare()
-            player.play()
+            val manager = activePlayerManager
+            if (manager != null) {
+                manager.playMediaItem(
+                    mediaUri = mediaUri,
+                    mediaId = item.filePath,
+                    mimeType = item.mimeType,
+                    title = item.title,
+                    artist = item.artist,
+                    album = item.album,
+                    artworkUri = artworkUri
+                )
+            } else {
+                val metadata = MediaMetadata.Builder()
+                    .setTitle(item.title)
+                    .setArtist(item.artist ?: "")
+                    .setAlbumTitle(item.album ?: "")
+                    .build()
+
+                val mediaItem = MediaItem.Builder()
+                    .setUri(mediaUri)
+                    .setMediaId(item.filePath)
+                    .setMimeType(item.mimeType)
+                    .setMediaMetadata(metadata)
+                    .build()
+
+                player.stop()
+                player.setMediaItem(mediaItem)
+                player.prepare()
+                player.play()
+            }
+            updateNotification()
         } catch (e: Exception) {
             Log.e(TAG, "Error playing media item: ${item.filePath}", e)
         }
     }
 
     fun togglePlayPause() {
-        val player = activePlayer ?: return
         try {
-            if (player.isPlaying) {
-                player.pause()
+            val manager = activePlayerManager
+            if (manager != null) {
+                manager.togglePlayPause()
             } else {
-                if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) {
-                    player.prepare()
+                val player = activePlayer
+                if (player == null) {
+                    Log.w(TAG, "activePlayer is null in togglePlayPause. Starting PlaybackService...")
+                    startPlaybackService()
+                    viewModelScope.launch {
+                        delay(300L)
+                        val retryManager = activePlayerManager
+                        if (retryManager != null) {
+                            retryManager.togglePlayPause()
+                        } else {
+                            activePlayer?.play()
+                        }
+                    }
+                    return
                 }
-                player.play()
+                if (player.isPlaying && player.playerError == null) {
+                    player.pause()
+                } else {
+                    val hasError = player.playerError != null
+                    val isIdleOrEnded = player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED
+                    val currentItem = player.currentMediaItem
+                    if ((hasError || isIdleOrEnded) && currentItem != null) {
+                        val currentPos = player.currentPosition.coerceAtLeast(0L)
+                        player.stop()
+                        player.clearMediaItems()
+                        player.setMediaItem(currentItem, currentPos)
+                        player.prepare()
+                    } else if (isIdleOrEnded) {
+                        player.prepare()
+                    }
+                    player.play()
+                }
             }
+            updateNotification()
         } catch (e: Exception) {
             Log.e(TAG, "Error in togglePlayPause", e)
         }

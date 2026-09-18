@@ -75,6 +75,9 @@ interface VolumeDao {
     @Query("SELECT * FROM volumes")
     fun getAllVolumesFlow(): Flow<List<VolumeEntity>>
 
+    @Query("SELECT * FROM volumes")
+    suspend fun getAllVolumes(): List<VolumeEntity>
+
     @Query("SELECT * FROM volumes WHERE volumeId = :volumeId LIMIT 1")
     suspend fun getVolumeById(volumeId: String): VolumeEntity?
 

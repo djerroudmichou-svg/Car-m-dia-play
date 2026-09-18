@@ -167,7 +167,7 @@ fun MediaItemActionDialog(
                                     modifier = Modifier.size(22.dp)
                                 )
                                 Text(
-                                    text = "تحديد متعدد",
+                                    text = strings.multiSelect,
                                     color = colors.textPrimary,
                                     fontSize = if (isCompact) 13.sp else 14.sp,
                                     fontWeight = FontWeight.SemiBold
@@ -385,7 +385,7 @@ fun CreatePlaylistDialog(
                             border = ButtonDefaults.outlinedButtonBorder.copy(brush = androidx.compose.ui.graphics.SolidColor(colors.cardBorder))
                         ) {
                             Text(
-                                text = "إلغاء",
+                                text = strings.cancel,
                                 color = colors.textSecondary,
                                 fontSize = if (isCompact) 13.sp else 14.sp
                             )
@@ -619,6 +619,7 @@ fun ConfirmDeleteDialog(
     isCompact: Boolean = false
 ) {
     val colors = LocalCarColors.current
+    val strings = LocalAppStrings.current
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -693,7 +694,7 @@ fun ConfirmDeleteDialog(
                             border = ButtonDefaults.outlinedButtonBorder.copy(brush = androidx.compose.ui.graphics.SolidColor(colors.cardBorder))
                         ) {
                             Text(
-                                text = "إلغاء",
+                                text = strings.cancel,
                                 color = colors.textSecondary,
                                 fontSize = if (isCompact) 12.sp else 13.sp
                             )
@@ -712,7 +713,7 @@ fun ConfirmDeleteDialog(
                             shape = RoundedCornerShape(12.dp)
                         ) {
                             Text(
-                                text = "حذف",
+                                text = strings.delete,
                                 color = Color.White,
                                 fontSize = if (isCompact) 12.sp else 13.sp,
                                 fontWeight = FontWeight.Bold
@@ -832,7 +833,7 @@ fun PlaylistSelectionDialog(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Text(
-                        text = "إضافة إلى قائمة تشغيل",
+                        text = strings.addToPlaylist,
                         color = colors.textPrimary,
                         fontSize = if (isCompact) 16.sp else 18.sp,
                         fontWeight = FontWeight.Bold
@@ -921,7 +922,7 @@ fun PlaylistSelectionDialog(
                         onClick = onDismiss,
                         modifier = Modifier.align(Alignment.End)
                     ) {
-                        Text(text = "إغلاق", color = colors.accent)
+                        Text(text = strings.close, color = colors.accent)
                     }
                 }
             }
@@ -987,7 +988,7 @@ fun CustomPlaylistsListView(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = if (isVideo) "إنشاء قائمة لتجميع مقاطع الفيديو المفضلة" else "إنشاء قائمة تشغيل مخصصة لأغانيك المختارة",
+                        text = if (isVideo) strings.createPlaylistSubtitleVideo else strings.createPlaylistSubtitleMusic,
                         color = colors.textSecondary,
                         fontSize = if (isCompact) 10.sp else 11.sp
                     )

@@ -122,6 +122,7 @@ fun CompactAudioMiniBar(
             ) {
                 CoverArtImage(
                     coverArtPath = currentPlaying.coverArtPath,
+                    filePath = currentPlaying.filePath,
                     title = currentPlaying.title,
                     modifier = Modifier.fillMaxSize()
                 )
@@ -146,61 +147,63 @@ fun CompactAudioMiniBar(
                 )
             }
 
-            // Big car touch controls
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                IconButton(
-                    onClick = onPrevious,
-                    modifier = Modifier.size(38.dp)
+            // Big car touch controls in standard LTR layout
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.SkipPrevious,
-                        contentDescription = "Previous",
-                        tint = colors.textPrimary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
+                    IconButton(
+                        onClick = onPrevious,
+                        modifier = Modifier.size(38.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.SkipPrevious,
+                            contentDescription = "Previous",
+                            tint = colors.textPrimary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
 
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(colors.accent)
-                        .clickable(onClick = onPlayPauseToggle),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        contentDescription = if (isPlaying) "Pause" else "Play",
-                        tint = colors.onAccent,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(colors.accent)
+                            .clickable(onClick = onPlayPauseToggle),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            contentDescription = if (isPlaying) "Pause" else "Play",
+                            tint = colors.onAccent,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
 
-                IconButton(
-                    onClick = onNext,
-                    modifier = Modifier.size(38.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.SkipNext,
-                        contentDescription = "Next",
-                        tint = colors.textPrimary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
+                    IconButton(
+                        onClick = onNext,
+                        modifier = Modifier.size(38.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.SkipNext,
+                            contentDescription = "Next",
+                            tint = colors.textPrimary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
 
-                IconButton(
-                    onClick = onExpandFullscreen,
-                    modifier = Modifier.size(38.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Fullscreen,
-                        contentDescription = "Expand",
-                        tint = colors.accent,
-                        modifier = Modifier.size(22.dp)
-                    )
+                    IconButton(
+                        onClick = onExpandFullscreen,
+                        modifier = Modifier.size(38.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Fullscreen,
+                            contentDescription = "Expand",
+                            tint = colors.accent,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
             }
         }
@@ -233,6 +236,7 @@ fun MusicBrowserPane(
     onCreatePlaylistClick: () -> Unit = {},
     onDeleteCustomPlaylist: (CustomPlaylistEntity) -> Unit = {},
     filteredTracks: List<MediaItemEntity>,
+    allTracks: List<MediaItemEntity> = emptyList(),
     currentPlaying: MediaItemEntity?,
     onPlayTrack: (MediaItemEntity, List<MediaItemEntity>) -> Unit,
     onTrackLongClick: ((MediaItemEntity) -> Unit)? = null,
@@ -454,26 +458,46 @@ fun MusicBrowserPane(
             }
             MusicCategory.FOLDERS -> {
                 if (selectedFolder != null) {
+                    val folderTracks = remember(filteredTracks, allTracks, selectedFolder) {
+                        if (filteredTracks.isNotEmpty()) {
+                            filteredTracks
+                        } else if (allTracks.isNotEmpty()) {
+                            val target = selectedFolder.trim().trimEnd('/')
+                            val targetName = File(target).name
+                            allTracks.filter { item ->
+                                val p = (File(item.filePath).parent ?: "Root").trimEnd('/')
+                                val pName = File(item.filePath).parentFile?.name ?: ""
+                                p == target ||
+                                p.equals(target, ignoreCase = true) ||
+                                p.startsWith("$target/") ||
+                                item.filePath.startsWith("$target/") ||
+                                (targetName.isNotBlank() && pName.equals(targetName, ignoreCase = true)) ||
+                                p.endsWith("/" + target.trimStart('/'))
+                            }
+                        } else {
+                            emptyList()
+                        }
+                    }
                     SubListHeader(
-                        title = selectedFolder,
+                        title = File(selectedFolder).name.ifEmpty { selectedFolder },
                         subtitle = strings.backToFolders,
                         onBack = { onSelectFolder(null) }
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     TracksListView(
-                        tracks = filteredTracks,
+                        tracks = folderTracks,
                         currentPlaying = currentPlaying,
                         isPlaying = currentPlaying != null,
                         selectedIds = selectedIds,
                         isSelectionMode = isSelectionMode,
-                        onTrackClick = { onPlayTrack(it, filteredTracks) },
+                        onTrackClick = { onPlayTrack(it, folderTracks) },
                         onTrackLongClick = onTrackLongClick,
                         onToggleSelection = onToggleSelection
                     )
                 } else {
                     FoldersListView(
                         folders = foldersList,
-                        onFolderSelected = { onSelectFolder(it.folderName) }
+                        onFolderSelected = { onSelectFolder(it.folderPath) }
                     )
                 }
             }
@@ -642,27 +666,30 @@ fun MusicNowPlayingPane(
             }
         }
 
-        // Cover Art
+        // Cover Art - Enlarged to take up the full remaining vertical space
         Box(
             modifier = Modifier
-                .sizeIn(
-                    minWidth = if (isCompact) 48.dp else 70.dp,
-                    maxWidth = if (isCompact) 85.dp else 115.dp,
-                    minHeight = if (isCompact) 48.dp else 70.dp,
-                    maxHeight = if (isCompact) 85.dp else 115.dp
-                )
-                .fillMaxHeight(if (isCompact) 0.30f else 0.36f)
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(if (isCompact) 12.dp else 16.dp))
-                .border(2.dp, colors.accent.copy(alpha = 0.5f), RoundedCornerShape(if (isCompact) 12.dp else 16.dp))
-                .clickable(onClick = onFullscreenExpand),
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
             contentAlignment = Alignment.Center
         ) {
-            CoverArtImage(
-                coverArtPath = currentPlaying?.coverArtPath,
-                title = currentPlaying?.title ?: "Car Media",
-                modifier = Modifier.fillMaxSize()
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(if (isCompact) 14.dp else 20.dp))
+                    .border(2.dp, colors.accent.copy(alpha = 0.6f), RoundedCornerShape(if (isCompact) 14.dp else 20.dp))
+                    .clickable(onClick = onFullscreenExpand),
+                contentAlignment = Alignment.Center
+            ) {
+                CoverArtImage(
+                    coverArtPath = currentPlaying?.coverArtPath,
+                    filePath = currentPlaying?.filePath,
+                    title = currentPlaying?.title ?: "Car Media",
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
         }
 
         // Track & Artist Info
@@ -690,106 +717,108 @@ fun MusicNowPlayingPane(
             )
         }
 
-        // Progress Slider
-        Column(modifier = Modifier.fillMaxWidth()) {
-            val progressFraction = if (playbackDuration > 0) {
-                (playbackProgress.toFloat() / playbackDuration).coerceIn(0f, 1f)
-            } else 0f
+        // Progress Slider & Controls in standard LTR automotive layout
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                val progressFraction = if (playbackDuration > 0) {
+                    (playbackProgress.toFloat() / playbackDuration).coerceIn(0f, 1f)
+                } else 0f
 
-            Slider(
-                value = progressFraction,
-                onValueChange = onSeek,
-                modifier = Modifier.fillMaxWidth(),
-                colors = SliderDefaults.colors(
-                    thumbColor = colors.accent,
-                    activeTrackColor = colors.accent,
-                    inactiveTrackColor = colors.cardBorder
+                Slider(
+                    value = progressFraction,
+                    onValueChange = onSeek,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = SliderDefaults.colors(
+                        thumbColor = colors.accent,
+                        activeTrackColor = colors.accent,
+                        inactiveTrackColor = colors.cardBorder
+                    )
                 )
-            )
 
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "\u200E${DateUtils.formatElapsedTime(playbackProgress / 1000)}\u200E",
+                        color = colors.textSecondary,
+                        fontSize = 11.sp
+                    )
+                    Text(
+                        text = "\u200E${DateUtils.formatElapsedTime(playbackDuration / 1000)}\u200E",
+                        color = colors.textSecondary,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+
+            // Controls
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "\u200E${DateUtils.formatElapsedTime(playbackProgress / 1000)}\u200E",
-                    color = colors.textSecondary,
-                    fontSize = 11.sp
-                )
-                Text(
-                    text = "\u200E${DateUtils.formatElapsedTime(playbackDuration / 1000)}\u200E",
-                    color = colors.textSecondary,
-                    fontSize = 11.sp
-                )
-            }
-        }
-
-        // Controls
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(if (isCompact) 48.dp else 58.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(
-                onClick = onShuffleToggle,
-                modifier = Modifier.size(if (isCompact) 32.dp else 40.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Shuffle,
-                    contentDescription = "Shuffle",
-                    tint = if (isShuffleEnabled) colors.accent else colors.textSecondary,
-                    modifier = Modifier.size(if (isCompact) 18.dp else 22.dp)
-                )
-            }
-
-            CarSeekButton(
-                icon = Icons.Filled.SkipPrevious,
-                contentDescription = strings.previous,
-                modifier = Modifier.size(if (isCompact) 42.dp else 50.dp),
-                iconSize = if (isCompact) 22.dp else 26.dp,
-                isSeeking = isRewinding,
-                onClick = onPrevious,
-                onHoldStart = onRewindStart,
-                onHoldEnd = onRewindEnd
-            )
-
-            IconButton(
-                onClick = onPlayPauseToggle,
                 modifier = Modifier
-                    .size(if (isCompact) 48.dp else 58.dp)
-                    .background(colors.accent, CircleShape)
+                    .fillMaxWidth()
+                    .height(if (isCompact) 48.dp else 58.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = if (isPlaying) strings.pause else strings.play,
-                    tint = colors.onAccent,
-                    modifier = Modifier.size(if (isCompact) 26.dp else 32.dp)
-                )
-            }
+                IconButton(
+                    onClick = onShuffleToggle,
+                    modifier = Modifier.size(if (isCompact) 32.dp else 40.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Shuffle,
+                        contentDescription = "Shuffle",
+                        tint = if (isShuffleEnabled) colors.accent else colors.textSecondary,
+                        modifier = Modifier.size(if (isCompact) 18.dp else 22.dp)
+                    )
+                }
 
-            CarSeekButton(
-                icon = Icons.Filled.SkipNext,
-                contentDescription = strings.next,
-                modifier = Modifier.size(if (isCompact) 42.dp else 50.dp),
-                iconSize = if (isCompact) 22.dp else 26.dp,
-                isSeeking = isFastForwarding,
-                onClick = onNext,
-                onHoldStart = onFastForwardStart,
-                onHoldEnd = onFastForwardEnd
-            )
-
-            IconButton(
-                onClick = onRepeatToggle,
-                modifier = Modifier.size(if (isCompact) 32.dp else 40.dp)
-            ) {
-                Icon(
-                    imageVector = if (repeatMode == Player.REPEAT_MODE_ONE) Icons.Filled.RepeatOne else Icons.Filled.Repeat,
-                    contentDescription = "Repeat",
-                    tint = if (repeatMode != Player.REPEAT_MODE_OFF) colors.accent else colors.textSecondary,
-                    modifier = Modifier.size(if (isCompact) 18.dp else 22.dp)
+                CarSeekButton(
+                    icon = Icons.Filled.SkipPrevious,
+                    contentDescription = strings.previous,
+                    modifier = Modifier.size(if (isCompact) 42.dp else 50.dp),
+                    iconSize = if (isCompact) 22.dp else 26.dp,
+                    isSeeking = isRewinding,
+                    onClick = onPrevious,
+                    onHoldStart = onRewindStart,
+                    onHoldEnd = onRewindEnd
                 )
+
+                IconButton(
+                    onClick = onPlayPauseToggle,
+                    modifier = Modifier
+                        .size(if (isCompact) 48.dp else 58.dp)
+                        .background(colors.accent, CircleShape)
+                ) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = if (isPlaying) strings.pause else strings.play,
+                        tint = colors.onAccent,
+                        modifier = Modifier.size(if (isCompact) 26.dp else 32.dp)
+                    )
+                }
+
+                CarSeekButton(
+                    icon = Icons.Filled.SkipNext,
+                    contentDescription = strings.next,
+                    modifier = Modifier.size(if (isCompact) 42.dp else 50.dp),
+                    iconSize = if (isCompact) 22.dp else 26.dp,
+                    isSeeking = isFastForwarding,
+                    onClick = onNext,
+                    onHoldStart = onFastForwardStart,
+                    onHoldEnd = onFastForwardEnd
+                )
+
+                IconButton(
+                    onClick = onRepeatToggle,
+                    modifier = Modifier.size(if (isCompact) 32.dp else 40.dp)
+                ) {
+                    Icon(
+                        imageVector = if (repeatMode == Player.REPEAT_MODE_ONE) Icons.Filled.RepeatOne else Icons.Filled.Repeat,
+                        contentDescription = "Repeat",
+                        tint = if (repeatMode != Player.REPEAT_MODE_OFF) colors.accent else colors.textSecondary,
+                        modifier = Modifier.size(if (isCompact) 18.dp else 22.dp)
+                    )
+                }
             }
         }
     }
@@ -1064,11 +1093,51 @@ fun VideoBrowserPane(
                         )
                     }
                     VideoCategory.FOLDERS -> {
-                        VideoFoldersListView(
-                            folders = foldersList,
-                            onFolderSelected = { onFolderSelected(it.folderPath) },
-                            isCompact = isCompact
-                        )
+                        if (selectedFolder != null) {
+                            val folderVideos = remember(filteredVideos, totalVideosCount, selectedFolder) {
+                                if (filteredVideos.isNotEmpty()) {
+                                    filteredVideos
+                                } else {
+                                    val target = selectedFolder.trim().trimEnd('/')
+                                    val targetName = File(target).name
+                                    filteredVideos.filter { item ->
+                                        val p = (File(item.filePath).parent ?: "Root").trimEnd('/')
+                                        val pName = File(item.filePath).parentFile?.name ?: ""
+                                        p == target ||
+                                        p.equals(target, ignoreCase = true) ||
+                                        p.startsWith("$target/") ||
+                                        item.filePath.startsWith("$target/") ||
+                                        (targetName.isNotBlank() && pName.equals(targetName, ignoreCase = true)) ||
+                                        p.endsWith("/" + target.trimStart('/'))
+                                    }
+                                }
+                            }
+                            val folderDisplayName = File(selectedFolder ?: "").name.let { n -> if (n.isEmpty()) (selectedFolder ?: "") else n }
+                            SubListHeader(
+                                title = folderDisplayName,
+                                subtitle = strings.backToFolders,
+                                onBack = { onFolderSelected(null) }
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            VideoItemsListView(
+                                videos = folderVideos,
+                                currentPlaying = currentPlaying,
+                                favoritePaths = favoritePaths,
+                                selectedIds = selectedIds,
+                                isSelectionMode = isSelectionMode,
+                                onVideoClick = { onPlayVideo(it, folderVideos) },
+                                onToggleFavorite = onToggleFavorite,
+                                onVideoLongClick = onVideoLongClick,
+                                onToggleSelection = onToggleSelection,
+                                isCompact = isCompact
+                            )
+                        } else {
+                            VideoFoldersListView(
+                                folders = foldersList,
+                                onFolderSelected = { onFolderSelected(it.folderPath) },
+                                isCompact = isCompact
+                            )
+                        }
                     }
                     VideoCategory.PLAYLISTS -> {
                         VideoPlaylistsListView(

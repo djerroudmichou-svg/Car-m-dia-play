@@ -6,9 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -35,6 +33,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import coil.request.ImageRequest
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.example.data.CoverArtResolver
 import com.example.data.MediaItemEntity
 import com.example.localization.LocalAppStrings
 import com.example.theme.LocalCarColors
@@ -51,7 +52,10 @@ import com.example.viewmodel.ArtistGroup
 import com.example.viewmodel.FolderGroup
 import com.example.viewmodel.MusicCategory
 import com.example.viewmodel.MusicVolumeGroup
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 // ==========================================
@@ -352,6 +356,7 @@ fun TracksListView(
                     ) {
                         CoverArtImage(
                             coverArtPath = track.coverArtPath,
+                            filePath = track.filePath,
                             title = track.title,
                             modifier = Modifier.fillMaxSize()
                         )
@@ -536,6 +541,7 @@ fun AlbumsListView(
                     ) {
                         CoverArtImage(
                             coverArtPath = album.sampleTrack.coverArtPath,
+                            filePath = album.sampleTrack.filePath,
                             title = album.title,
                             modifier = Modifier.fillMaxSize()
                         )
@@ -651,17 +657,50 @@ fun FoldersListView(
 @Composable
 fun CoverArtImage(
     coverArtPath: String?,
+    filePath: String? = null,
     title: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Fit,
+    useOriginalSize: Boolean = false
 ) {
     val colors = LocalCarColors.current
+    val context = LocalContext.current
 
-    if (!coverArtPath.isNullOrEmpty() && File(coverArtPath).exists()) {
+    val resolvedPath by produceState<String?>(
+        initialValue = if (!coverArtPath.isNullOrEmpty() && File(coverArtPath).exists() && File(coverArtPath).length() > 0L) coverArtPath else null,
+        key1 = coverArtPath,
+        key2 = filePath
+    ) {
+        if (!coverArtPath.isNullOrEmpty() && File(coverArtPath).exists() && File(coverArtPath).length() > 0L) {
+            value = coverArtPath
+        } else {
+            value = withContext(Dispatchers.IO) {
+                try {
+                    CoverArtResolver.resolveCoverArt(context, coverArtPath, filePath)
+                } catch (t: Throwable) {
+                    null
+                }
+            }
+        }
+    }
+
+    if (!resolvedPath.isNullOrEmpty() && File(resolvedPath!!).exists()) {
+        val imageRequest = remember(resolvedPath, useOriginalSize) {
+            ImageRequest.Builder(context)
+                .data(File(resolvedPath!!))
+                .crossfade(true)
+                .apply {
+                    if (useOriginalSize) {
+                        size(coil.size.Size.ORIGINAL)
+                    }
+                }
+                .build()
+        }
         AsyncImage(
-            model = File(coverArtPath),
+            model = imageRequest,
             contentDescription = title,
             modifier = modifier,
-            contentScale = ContentScale.Crop
+            contentScale = contentScale
         )
     } else {
         val gradient = Brush.linearGradient(
@@ -678,7 +717,7 @@ fun CoverArtImage(
                 imageVector = Icons.Outlined.Album,
                 contentDescription = null,
                 tint = colors.accent.copy(alpha = 0.8f),
-                modifier = Modifier.size(120.dp)
+                modifier = Modifier.fillMaxSize(0.45f)
             )
         }
     }
@@ -703,6 +742,11 @@ fun CarSeekButton(
     val colors = LocalCarColors.current
     var isHolding by remember { mutableStateOf(false) }
 
+    val currentOnClick by rememberUpdatedState(onClick)
+    val currentOnHoldStart by rememberUpdatedState(onHoldStart)
+    val currentOnHoldEnd by rememberUpdatedState(onHoldEnd)
+    val coroutineScope = rememberCoroutineScope()
+
     Box(
         modifier = modifier
             .clip(CircleShape)
@@ -713,25 +757,29 @@ fun CarSeekButton(
                 shape = CircleShape
             )
             .pointerInput(Unit) {
-                awaitEachGesture {
-                    awaitFirstDown()
-                    var held = false
-                    val timeoutResult = withTimeoutOrNull(350L) {
-                        waitForUpOrCancellation()
+                detectTapGestures(
+                    onTap = {
+                        currentOnClick()
+                    },
+                    onPress = {
+                        var isHeld = false
+                        val holdJob = coroutineScope.launch {
+                            delay(380L)
+                            isHeld = true
+                            isHolding = true
+                            currentOnHoldStart()
+                        }
+                        try {
+                            tryAwaitRelease()
+                        } finally {
+                            holdJob.cancel()
+                            if (isHeld) {
+                                isHolding = false
+                                currentOnHoldEnd()
+                            }
+                        }
                     }
-                    if (timeoutResult != null) {
-                        // Short click (Next or Previous Track)
-                        onClick()
-                    } else {
-                        // Held past 350ms -> Continuous Fast-Forward / Rewind
-                        held = true
-                        isHolding = true
-                        onHoldStart()
-                        waitForUpOrCancellation()
-                        isHolding = false
-                        onHoldEnd()
-                    }
-                }
+                )
             },
         contentAlignment = Alignment.Center
     ) {

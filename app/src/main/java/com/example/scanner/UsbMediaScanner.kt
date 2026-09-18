@@ -2,12 +2,12 @@ package com.example.scanner
 
 import android.content.Context
 import android.media.MediaMetadataRetriever
-import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.storage.StorageManager
 import android.provider.MediaStore
 import android.util.Log
+import com.example.data.CoverArtResolver
 import com.example.data.MediaItemEntity
 import com.example.data.MediaRepository
 import com.example.data.VolumeEntity
@@ -43,76 +43,178 @@ class UsbMediaScanner(
 
     /**
      * Finds and synchronizes all currently mounted storage volumes (USB drives and Internal Storage).
+     * CACHE-FIRST: Preserves existing database items and avoids resetting or flashing to 0.
      */
     suspend fun syncAllMountedVolumes() {
         if (_isScanning.value) return
         _isScanning.value = true
-        _scanProgress.value = "جاري اكتشاف وحدات التخزين..."
+        _scanProgress.value = ""
 
         try {
-            val storageManager = context.getSystemService(Context.STORAGE_SERVICE) as StorageManager
-            val storageVolumes = storageManager.storageVolumes
+            val storageManager = context.getSystemService(Context.STORAGE_SERVICE) as? StorageManager
             val currentlyMountedPaths = mutableSetOf<String>()
+            val activeVolumeIds = mutableSetOf<String>()
 
-            // Unmount all volumes first in local status, then we will set active ones to true.
-            repository.unmountAllVolumes()
-
-            // 1. Scan Internal Storage if available
+            // 1. Scan Internal Storage if available (always keep mounted)
             try {
                 val internalDir = Environment.getExternalStorageDirectory()
                 if (internalDir != null && internalDir.exists() && internalDir.canRead()) {
                     currentlyMountedPaths.add(internalDir.absolutePath)
+                    val internalVolumeId = "internal_storage"
+                    activeVolumeIds.add(internalVolumeId)
+
                     val internalVolume = VolumeEntity(
-                        volumeId = "internal_storage",
+                        volumeId = internalVolumeId,
                         rootPath = internalDir.absolutePath,
-                        label = "ذاكرة الجهاز الداخلية",
+                        label = "Internal Storage",
                         lastScanned = System.currentTimeMillis(),
                         isMounted = true
                     )
                     repository.insertVolume(internalVolume)
-                    _scanProgress.value = "فحص ذاكرة الجهاز الداخلية..."
                     scanInternalStorage(internalVolume, internalDir)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Error checking internal storage", e)
             }
 
-            // 2. Scan Mounted USB / OTG Volumes
-            for (volume in storageVolumes) {
-                val state = volume.state
-                if (state == Environment.MEDIA_MOUNTED || state == Environment.MEDIA_MOUNTED_READ_ONLY) {
-                    val rootDir = getVolumeDirectory(volume) ?: continue
-                    if (!rootDir.exists() || !rootDir.canRead()) continue
+            // 2. Discover Mounted USB / OTG Volumes via StorageManager
+            if (storageManager != null) {
+                try {
+                    val storageVolumes = storageManager.storageVolumes
+                    for (volume in storageVolumes) {
+                        try {
+                            val state = volume.state
+                            if (state == Environment.MEDIA_MOUNTED || state == Environment.MEDIA_MOUNTED_READ_ONLY) {
+                                val rootDir = getVolumeDirectory(volume) ?: continue
+                                if (!rootDir.exists() || !rootDir.canRead()) continue
 
-                    // Skip if it's primary and already scanned as internal storage
-                    if (rootDir.absolutePath in currentlyMountedPaths && volume.isPrimary) continue
+                                // Skip if it's primary and already scanned as internal storage
+                                if (rootDir.absolutePath in currentlyMountedPaths && volume.isPrimary) continue
 
-                    currentlyMountedPaths.add(rootDir.absolutePath)
-                    val uuid = volume.uuid ?: generateStableUuidFromPath(rootDir.absolutePath)
-                    val label = volume.getDescription(context) ?: "USB Drive"
+                                currentlyMountedPaths.add(rootDir.absolutePath)
+                                val uuid = volume.uuid ?: generateStableUuidFromPath(rootDir.absolutePath)
+                                val volumeId = "usb_${uuid.replace("-", "_")}"
+                                activeVolumeIds.add(volumeId)
 
-                    Log.d(TAG, "Mounted USB detected: $label at ${rootDir.absolutePath} with UUID $uuid")
+                                val label = volume.getDescription(context)?.ifBlank { null } ?: "USB (${rootDir.name})"
 
-                    val volumeEntity = VolumeEntity(
-                        volumeId = uuid,
-                        rootPath = rootDir.absolutePath,
-                        label = label,
-                        lastScanned = System.currentTimeMillis(),
-                        isMounted = true
-                    )
-                    repository.insertVolume(volumeEntity)
+                                Log.d(TAG, "Mounted USB detected: $label at ${rootDir.absolutePath} with ID $volumeId")
 
-                    _scanProgress.value = "جاري فحص $label..."
-                    scanVolumeWithCacheValidation(volumeEntity, rootDir)
+                                val volumeEntity = VolumeEntity(
+                                    volumeId = volumeId,
+                                    rootPath = rootDir.absolutePath,
+                                    label = label,
+                                    lastScanned = System.currentTimeMillis(),
+                                    isMounted = true
+                                )
+                                repository.insertVolume(volumeEntity)
+
+                                scanVolumeWithCacheValidation(volumeEntity, rootDir)
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error inspecting storage volume", e)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "StorageManager storageVolumes retrieval failed", e)
                 }
+            }
+
+            // 3. Fallback discovery for Android Head Units (Allwinner, Rockchip, MTK, Android 7/8/9 OTG paths)
+            discoverAlternativeUsbPaths(currentlyMountedPaths, activeVolumeIds)
+
+            // 4. Update mount status for all known volumes without wiping database
+            try {
+                val existingVolumes = repository.getAllVolumes()
+                for (v in existingVolumes) {
+                    val shouldBeMounted = activeVolumeIds.contains(v.volumeId)
+                    if (v.isMounted != shouldBeMounted) {
+                        repository.updateMountStatus(v.volumeId, shouldBeMounted)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error updating volume mount states", e)
             }
 
             Log.d(TAG, "Sync complete. Active volumes: ${currentlyMountedPaths.size}")
         } catch (e: Exception) {
-            Log.e(TAG, "Error syncAllMountedVolumes", e)
+            Log.e(TAG, "Error in syncAllMountedVolumes", e)
         } finally {
             _isScanning.value = false
             _scanProgress.value = ""
+        }
+    }
+
+    /**
+     * Checks known Android Head Unit mount paths for USB storage (/storage, /mnt/media_rw, /mnt/usb).
+     */
+    private suspend fun discoverAlternativeUsbPaths(
+        currentlyMountedPaths: MutableSet<String>,
+        activeVolumeIds: MutableSet<String>
+    ) {
+        val candidateRoots = mutableListOf<File>()
+
+        // Check Context secondary storage directories
+        try {
+            val extDirs = androidx.core.content.ContextCompat.getExternalFilesDirs(context, null)
+            for (dir in extDirs) {
+                if (dir != null) {
+                    var parent: File? = dir
+                    while (parent != null && parent.parentFile != null && parent.parentFile?.absolutePath != "/storage" && parent.parentFile?.absolutePath != "/mnt") {
+                        parent = parent.parentFile
+                    }
+                    if (parent != null && parent.exists() && parent.canRead()) {
+                        candidateRoots.add(parent)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error inspecting getExternalFilesDirs", e)
+        }
+
+        // Common Car Head Unit mount locations
+        val searchFolders = listOf("/storage", "/mnt/media_rw", "/mnt/usb", "/mnt/udisk", "/mnt/usb_storage")
+        for (folderPath in searchFolders) {
+            try {
+                val folder = File(folderPath)
+                if (folder.exists() && folder.isDirectory && folder.canRead()) {
+                    val subDirs = folder.listFiles() ?: continue
+                    for (sub in subDirs) {
+                        if (sub.isDirectory && sub.canRead() && !sub.name.startsWith(".") && sub.name != "emulated" && sub.name != "self") {
+                            candidateRoots.add(sub)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore security restrictions on certain paths
+            }
+        }
+
+        for (rootDir in candidateRoots.distinctBy { it.absolutePath }) {
+            try {
+                if (rootDir.absolutePath in currentlyMountedPaths) continue
+                if (!rootDir.exists() || !rootDir.canRead()) continue
+
+                currentlyMountedPaths.add(rootDir.absolutePath)
+                val uuid = generateStableUuidFromPath(rootDir.absolutePath)
+                val volumeId = "usb_${uuid.replace("-", "_")}"
+                activeVolumeIds.add(volumeId)
+
+                val label = "USB (${rootDir.name})"
+                Log.d(TAG, "Discovered Car Head Unit USB path: $label at ${rootDir.absolutePath}")
+
+                val volumeEntity = VolumeEntity(
+                    volumeId = volumeId,
+                    rootPath = rootDir.absolutePath,
+                    label = label,
+                    lastScanned = System.currentTimeMillis(),
+                    isMounted = true
+                )
+                repository.insertVolume(volumeEntity)
+                scanVolumeWithCacheValidation(volumeEntity, rootDir)
+            } catch (e: Exception) {
+                Log.w(TAG, "Error scanning candidate USB path: ${rootDir.absolutePath}", e)
+            }
         }
     }
 
@@ -143,28 +245,24 @@ class UsbMediaScanner(
                     }
 
                     if (diskFiles.isNotEmpty()) {
-                        val retriever = MediaMetadataRetriever()
                         for (file in diskFiles) {
                             try {
-                                mediaStoreItems.add(extractMetadata(file, volume.volumeId, retriever))
+                                mediaStoreItems.add(extractMetadata(file, volume.volumeId))
                             } catch (e: Exception) {
                                 Log.w(TAG, "Error extracting metadata for internal file: ${file.path}", e)
                             }
                         }
-                        try { retriever.release() } catch (e: Exception) {}
                     }
                 }
 
                 // Check cache match with current MediaStore state
                 val cachedItems = repository.getMediaForVolume(volume.volumeId)
+                val cachedMap = cachedItems.associateBy { it.filePath }
                 val isIdentical = cachedItems.isNotEmpty() &&
                     cachedItems.size == mediaStoreItems.size &&
-                    run {
-                        val cachedMap = cachedItems.associateBy { it.filePath }
-                        mediaStoreItems.all { item ->
-                            val c = cachedMap[item.filePath]
-                            c != null && c.size == item.size && c.lastModified == item.lastModified
-                        }
+                    mediaStoreItems.all { item ->
+                        val c = cachedMap[item.filePath]
+                        c != null && c.size == item.size && c.lastModified == item.lastModified
                     }
 
                 if (isIdentical) {
@@ -172,11 +270,20 @@ class UsbMediaScanner(
                     return@withContext
                 }
 
-                // If difference detected, update DB
-                Log.d(TAG, "Updating internal storage cache with ${mediaStoreItems.size} items.")
-                repository.clearMediaForVolume(volume.volumeId)
-                if (mediaStoreItems.isNotEmpty()) {
-                    repository.insertMediaItems(mediaStoreItems)
+                // Perform smart incremental update: do NOT clear whole volume
+                val mediaStorePaths = mediaStoreItems.map { it.filePath }.toSet()
+                val itemsToDelete = cachedItems.filter { !mediaStorePaths.contains(it.filePath) }
+                val itemsToInsert = mediaStoreItems.filter { item ->
+                    val cached = cachedMap[item.filePath]
+                    cached == null || cached.lastModified != item.lastModified || cached.size != item.size
+                }
+
+                Log.d(TAG, "Updating internal storage cache: +${itemsToInsert.size} new/modified, -${itemsToDelete.size} deleted, ${cachedItems.size - itemsToDelete.size} preserved.")
+                if (itemsToDelete.isNotEmpty()) {
+                    repository.deleteMediaItems(itemsToDelete)
+                }
+                if (itemsToInsert.isNotEmpty()) {
+                    repository.insertMediaItems(itemsToInsert)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error scanning internal storage", e)
@@ -207,7 +314,7 @@ class UsbMediaScanner(
                 val itemsToKeep = mutableListOf<MediaItemEntity>()
 
                 val diskPaths = filesOnDisk.map { it.absolutePath }.toSet()
-                
+
                 // Identify deleted items
                 for (cached in cachedItems) {
                     if (!diskPaths.contains(cached.filePath)) {
@@ -239,20 +346,16 @@ class UsbMediaScanner(
 
                 if (filesToScan.isNotEmpty()) {
                     val freshItems = mutableListOf<MediaItemEntity>()
-                    val retriever = MediaMetadataRetriever()
-                    
-                    for ((index, file) in filesToScan.withIndex()) {
-                        _scanProgress.value = "فحص الملفات الجديدة (${index + 1}/${filesToScan.size})"
+
+                    for (file in filesToScan) {
                         try {
-                            val entity = extractMetadata(file, volume.volumeId, retriever)
+                            val entity = extractMetadata(file, volume.volumeId)
                             freshItems.add(entity)
                         } catch (e: Exception) {
                             Log.w(TAG, "Metadata extraction failed for ${file.path}", e)
                         }
                     }
-                    
-                    try { retriever.release() } catch (e: Exception) {}
-                    
+
                     if (freshItems.isNotEmpty()) {
                         repository.insertMediaItems(freshItems)
                     }
@@ -307,6 +410,8 @@ class UsbMediaScanner(
                     val lastMod = cursor.getLong(modCol) * 1000L
                     val mime = cursor.getString(mimeCol) ?: "audio/mpeg"
 
+                    val coverArtPath = CoverArtResolver.findCompanionCoverArt(file)
+
                     items.add(
                         MediaItemEntity(
                             filePath = path,
@@ -318,7 +423,8 @@ class UsbMediaScanner(
                             size = size,
                             lastModified = lastMod,
                             isVideo = false,
-                            mimeType = mime
+                            mimeType = mime,
+                            coverArtPath = coverArtPath
                         )
                     )
                 }
@@ -407,23 +513,25 @@ class UsbMediaScanner(
     /**
      * Uses MediaMetadataRetriever to parse and build a MediaItemEntity for Room.
      */
-    private fun extractMetadata(file: File, volumeId: String, retriever: MediaMetadataRetriever): MediaItemEntity {
+    private fun extractMetadata(file: File, volumeId: String): MediaItemEntity {
         val path = file.absolutePath
         val ext = file.extension.lowercase()
         val isVideo = VIDEO_EXTENSIONS.contains(ext)
         val mimeType = if (isVideo) "video/$ext" else "audio/$ext"
 
         var title = file.nameWithoutExtension
-        var artist = "فنان غير معروف"
-        var album = "ألبوم غير معروف"
+        var artist = ""
+        var album = ""
         var duration = 0L
         var coverArtPath: String? = null
 
+        var retriever: MediaMetadataRetriever? = null
         try {
+            retriever = MediaMetadataRetriever()
             retriever.setDataSource(path)
             title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: file.nameWithoutExtension
-            artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: "فنان غير معروف"
-            album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: "ألبوم غير معروف"
+            artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: ""
+            album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: ""
             val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
             duration = durationStr?.toLongOrNull() ?: 0L
 
@@ -434,15 +542,23 @@ class UsbMediaScanner(
                     if (!coversDir.exists()) coversDir.mkdirs()
                     val hash = Math.abs(path.hashCode()).toString()
                     val artFile = File(coversDir, "art_${hash}_${file.length()}.jpg")
-                    if (!artFile.exists()) {
+                    if (!artFile.exists() || artFile.length() == 0L) {
                         artFile.writeBytes(picture)
                     }
                     coverArtPath = artFile.absolutePath
+                } else {
+                    coverArtPath = CoverArtResolver.findCompanionCoverArt(file)
                 }
             }
-        } catch (e: Exception) {
-            // Silently fall back to file names if metadata retrieval fails (helpful during mock testing or permission lags)
-            Log.w(TAG, "Could not extract metadata for $path, falling back to defaults", e)
+        } catch (t: Throwable) {
+            // Silently fall back to file names if metadata retrieval fails or memory is tight
+            Log.w(TAG, "Could not extract metadata for $path, falling back to defaults: ${t.message}")
+        } finally {
+            try {
+                retriever?.release()
+            } catch (ignored: Throwable) {
+                // Ignore release failure
+            }
         }
 
         return MediaItemEntity(
